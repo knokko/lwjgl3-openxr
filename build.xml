@@ -470,9 +470,6 @@
             <compileBinding binding="bgfx"/>
             <compileBinding binding="bullet"/>
             <compileBinding binding="cuda"/>
-            <compileBinding binding="driftfx">
-                <compilerarg line='--boot-class-path "${env.JAVA8_HOME}/jre/lib/rt.jar${path.separator}${env.JAVA8_HOME}/jre/lib/ext/jfxrt.jar"' if:set="set-boot-class-path"/>
-            </compileBinding>
             <compileBinding binding="egl"/>
             <compileBinding binding="jawt"/>
             <compileBinding binding="jemalloc"/>
@@ -517,24 +514,6 @@
             <compileBinding binding="vma">
                 <classpath><pathelement path="${bin.lwjgl}/vulkan"/></classpath>
             </compileBinding>
-            <sequential>
-                <mkdir dir="${bin.lwjgl}/driftfx/META-INF/versions/11" if:set="driftfx11"/>
-                <lwjgl.javac11
-                        destdir="${bin.lwjgl}/driftfx/META-INF/versions/11"
-
-                        srcdir="${module.lwjgl}/driftfx/src/main/java11"
-                        includes="**"
-
-                        taskname="javac: DriftFX - Java 11"
-                        if:set="driftfx11"
-                >
-                    <classpath>
-                        <pathelement path="${bin.lwjgl}/driftfx"/>
-                        <pathelement path="${lib}/java/openjfx11/javafx-base.jar"/>
-                        <pathelement path="${lib}/java/openjfx11/javafx-graphics.jar"/>
-                    </classpath>
-                </lwjgl.javac11>
-            </sequential>
         </parallel>
 
         <compileBinding binding="openxr">
@@ -798,7 +777,6 @@
             <include name="org/lwjgl/demo/bgfx/**" if:set="test.bgfx"/>
             <include name="org/lwjgl/demo/bullet/**" if:true="${binding.bullet}"/>
             <include name="org/lwjgl/demo/cuda/**" if:true="${binding.cuda}"/>
-            <include name="org/lwjgl/demo/driftfx/**" if:true="${binding.driftfx}"/>
             <include name="org/lwjgl/demo/egl/**" if:set="test.egl"/>
             <include name="org/lwjgl/demo/glfw/**" if:set="test.glfw"/>
             <include name="org/lwjgl/demo/llvm/**" if:true="${binding.llvm}"/>
@@ -884,7 +862,6 @@
             <classpath>
                 <pathelement path="${bin.lwjgl}/core/META-INF/versions/9" if:set="core.java9"/>
                 <pathelement path="${bin.lwjgl}/core/META-INF/versions/10" if:set="core.java10"/>
-                <pathelement path="${bin.lwjgl}/driftfx/META-INF/versions/11" if:set="driftfx11"/>
                 <pathelement path="${module.classpath}"/>
                 <pathelement path="${bin.test}"/>
                 <pathelement path="${bin.samples}"/>
@@ -896,10 +873,6 @@
                 <pathelement path="${lib}/java/jopt-simple.jar"/>
                 <pathelement path="${lib}/native"/>
             </classpath>
-
-            <modulepath if:set="driftfx11">
-                <pathelement path="${lib}/java/openjfx11"/>
-            </modulepath>
 
             <jvmarg value="-XstartOnFirstThread" if:set="platform.macos"/>
             <!--<jvmarg value="-Xcheck:jni"/>-->
@@ -1427,16 +1400,6 @@
 
         <!-- CUDA -->
         <release-module name="cuda" title="CUDA" if:true="${binding.cuda}"/>
-
-        <!-- DriftFX -->
-        <sequential>
-            <quiet>
-                <copy todir="${module.lwjgl}/driftfx/src/generated/java/META-INF/versions/11" if:set="driftfx11">
-                    <fileset dir="${module.lwjgl}/driftfx/src/main/java11" includes="**"/>
-                </copy>
-            </quiet>
-            <release-module name="driftfx" native-library="lwjgl_driftfx" title="DriftFX" if:true="${binding.driftfx}"/>
-        </sequential>
 
         <!-- EGL -->
         <release-module name="egl" title="EGL" if:true="${binding.egl}"/>
