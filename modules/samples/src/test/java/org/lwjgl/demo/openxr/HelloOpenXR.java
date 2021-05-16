@@ -123,7 +123,7 @@ public class HelloOpenXR {
     /**
      * Creates an array of XrStructs with their types pre set to @param type
      */
-    private static ByteBuffer mallocAndFillBufferStack(int capacity, int sizeof, int type) {
+    static ByteBuffer mallocAndFillBufferStack(int capacity, int sizeof, int type) {
         ByteBuffer b = stackMalloc(capacity * sizeof);
 
         for (int i = 0; i < capacity; i++) {

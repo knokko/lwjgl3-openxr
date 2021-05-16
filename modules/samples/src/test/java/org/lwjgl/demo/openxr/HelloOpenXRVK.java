@@ -37,6 +37,7 @@ public class HelloOpenXRVK {
     private long xrSystemId;
 
     private XrSession xrVkSession;
+    private int xrSessionState;
 
     private VkInstance vkInstance;
     private long vkDebugMessenger;
@@ -51,6 +52,7 @@ public class HelloOpenXRVK {
             initXrSystem();
             initVk();
             createXrVkSession();
+            loopXrSession();
         } catch (RuntimeException ex) {
             System.err.println("OpenXR testing failed:");
             ex.printStackTrace();
@@ -467,7 +469,131 @@ public class HelloOpenXRVK {
             PointerBuffer pSession = stack.callocPointer(1);
             xrCheck(xrCreateSession(xrInstance, ciSession, pSession), "CreateSession");
             xrVkSession = new XrSession(pSession.get(0), xrInstance);
+            xrSessionState = XR_SESSION_STATE_IDLE;
             System.out.println("Session is " + xrVkSession);
+        }
+    }
+
+    private void updateSessionState(MemoryStack stack) {
+        // Use malloc instead of calloc because this will be called frequently
+        XrEventDataBuffer pollEventData = XrEventDataBuffer.mallocStack(stack);
+
+        while (true) {
+            pollEventData.type(XR_TYPE_EVENT_DATA_BUFFER);
+            pollEventData.next(NULL);
+
+            int pollResult = xrPollEvent(xrInstance, pollEventData);
+            if (pollResult != XR_EVENT_UNAVAILABLE) {
+                xrCheck(pollResult, "PollEvent");
+
+                if (pollEventData.type() == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+                    XrEventDataSessionStateChanged sessionEvent = XrEventDataSessionStateChanged.create(pollEventData.address());
+                    xrSessionState = sessionEvent.state();
+                    System.out.println("Changed session state to " + xrSessionState);
+                } else {
+                    System.out.println("Received another event");
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    private void loopXrSession() {
+
+        // This is a safety check for debugging. Set to 0 to disable this.
+        long endTime = System.currentTimeMillis() + 5_000;
+
+        boolean startedSession = false;
+
+        while (true) {
+            System.out.println("Iteration: session state is " + xrSessionState);
+            try (MemoryStack stack = stackPush()) {
+                updateSessionState(stack);
+
+                if (xrSessionState == XR_SESSION_STATE_IDLE) {
+                    try {
+                        System.out.println("Session is idle");
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException("Shouldn't happen", e);
+                    }
+                    continue;
+                }
+
+                boolean timeoutStop = endTime != 0 && System.currentTimeMillis() > endTime;
+                if (timeoutStop && startedSession) {
+                    int exitResult = xrRequestExitSession(xrVkSession);
+                    if (exitResult != XR_SESSION_LOSS_PENDING) {
+                        xrCheck(exitResult, "RequestExitSession");
+                    }
+                    startedSession = false;
+                }
+
+                if (xrSessionState == XR_SESSION_STATE_STOPPING) {
+                    xrEndSession(xrVkSession);
+                }
+                if (
+                    xrSessionState == XR_SESSION_STATE_LOSS_PENDING || xrSessionState == XR_SESSION_STATE_EXITING ||
+                    xrSessionState == XR_SESSION_STATE_STOPPING
+                ) {
+                    break;
+                }
+
+                if (timeoutStop) {
+                    continue;
+                }
+
+                if (xrSessionState == XR_SESSION_STATE_READY && !startedSession) {
+                    XrSessionBeginInfo biSession = XrSessionBeginInfo.callocStack(stack);
+                    biSession.type(XR_TYPE_SESSION_BEGIN_INFO);
+                    biSession.primaryViewConfigurationType(XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
+
+                    System.out.println("Begin session");
+                    xrCheck(xrBeginSession(xrVkSession, biSession), "BeginSession");
+                    startedSession = true;
+                }
+
+                updateSessionState(stack);
+
+                if (
+                    xrSessionState == XR_SESSION_STATE_SYNCHRONIZED || xrSessionState == XR_SESSION_STATE_VISIBLE ||
+                    xrSessionState == XR_SESSION_STATE_FOCUSED || xrSessionState == XR_SESSION_STATE_READY
+                ) {
+                    XrFrameState frameState = XrFrameState.callocStack(stack);
+                    frameState.type(XR_TYPE_FRAME_STATE);
+                    int waitResult = xrWaitFrame(xrVkSession, null, frameState);
+
+                    // SESSION_LOSS_PENDING is also a valid result, but we will ignore it
+                    if (waitResult != XR_SESSION_LOSS_PENDING) {
+                        xrCheck(waitResult, "WaitFrame");
+                    }
+
+                    int beginResult = xrBeginFrame(xrVkSession, null);
+                    if (beginResult != XR_SESSION_LOSS_PENDING) {
+                        xrCheck(beginResult, "BeginFrame");
+                    }
+
+                    PointerBuffer layers = null;
+                    if (frameState.shouldRender()) {
+                        // TODO Render something and assign something to the layers variable
+                        System.out.println("Render...");
+                    } else {
+                        System.out.println("Skip frame");
+                    }
+
+                    XrFrameEndInfo eiFrame = XrFrameEndInfo.callocStack(stack);
+                    eiFrame.type(XR_TYPE_FRAME_END_INFO);
+                    eiFrame.displayTime(frameState.predictedDisplayTime());
+                    eiFrame.environmentBlendMode(XR_ENVIRONMENT_BLEND_MODE_OPAQUE);
+                    eiFrame.layers(layers);
+
+                    int endResult = xrEndFrame(xrVkSession, eiFrame);
+                    if (endResult != XR_SESSION_LOSS_PENDING) {
+                        xrCheck(endResult, "EndFrame");
+                    }
+                }
+            }
         }
     }
 
