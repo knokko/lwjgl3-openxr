@@ -9,8 +9,10 @@ import org.lwjgl.openxr.*;
 import org.lwjgl.system.*;
 import org.lwjgl.vulkan.*;
 
+import java.lang.reflect.*;
 import java.nio.*;
 import java.util.*;
+import java.util.function.*;
 
 import static org.lwjgl.demo.openxr.HelloOpenXR.*;
 import static org.lwjgl.openxr.EXTDebugUtils.*;
@@ -46,12 +48,16 @@ public class HelloOpenXRVK {
     private int vkQueueFamilyIndex;
     private int vkQueueIndex;
 
+    private XrSwapchain[] swapchains;
+    private int swapchainFormat;
+
     private void start() {
         try {
             createXrInstance();
             initXrSystem();
             initVk();
             createXrVkSession();
+            createRenderResources();
             loopXrSession();
         } catch (RuntimeException ex) {
             System.err.println("OpenXR testing failed:");
@@ -59,6 +65,7 @@ public class HelloOpenXRVK {
         }
 
         // Always clean up
+        destroyRenderResources();
         destroyXrVkSession();
         destroyVk();
         destroyXrInstance();
@@ -474,6 +481,99 @@ public class HelloOpenXRVK {
         }
     }
 
+    private void createRenderResources() {
+        try (MemoryStack stack = stackPush()) {
+
+            IntBuffer pNumFormats = stack.callocInt(1);
+            xrCheck(xrEnumerateSwapchainFormats(xrVkSession, pNumFormats, null), "EnumerateSwapchainFormats");
+
+            int numFormats = pNumFormats.get(0);
+            LongBuffer formats = stack.callocLong(numFormats);
+            xrCheck(xrEnumerateSwapchainFormats(xrVkSession, pNumFormats, formats), "EnumerateSwapchainFormats");
+
+            // SRGB formats are preferred due to the human perception of colors
+            int[] preferredFormats = {
+                VK_FORMAT_R8G8B8_SRGB, VK_FORMAT_B8G8R8_SRGB,
+                VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM
+            };
+            boolean[] hasPreferredFormats = new boolean[preferredFormats.length];
+
+            System.out.println("There are " + numFormats + " swapchain formats:");
+            for (int index = 0; index < numFormats; index++) {
+                long format = formats.get(index);
+                String formatName = findConstantMeaning(VK10.class, name -> name.startsWith("VK_FORMAT_"), format);
+                if (formatName == null) {
+                    formatName = "unknown";
+                }
+                System.out.println(formatName + " (" + format + ")");
+
+                for (int prefIndex = 0; prefIndex < preferredFormats.length; prefIndex++) {
+                    if (format == preferredFormats[prefIndex]) {
+                        hasPreferredFormats[prefIndex] = true;
+                    }
+                }
+            }
+            System.out.println("--------------");
+
+            swapchainFormat = -1;
+
+            // Pick the best format available
+            for (int prefIndex = 0; prefIndex < preferredFormats.length; prefIndex++) {
+                if (hasPreferredFormats[prefIndex]) {
+                    swapchainFormat = preferredFormats[prefIndex];
+                    break;
+                }
+            }
+
+            if (swapchainFormat == -1) {
+                // Damn... what kind of graphics card/xr runtime is this?
+                // Well... if we can't find any format we like, we will just pick the first one
+                swapchainFormat = (int) formats.get(0);
+            }
+
+            System.out.println("Chose swapchain format " + swapchainFormat);
+
+            IntBuffer pNumViews = stack.callocInt(1);
+            xrEnumerateViewConfigurationViews(xrInstance, xrSystemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, pNumViews, null);
+            int numViews = pNumViews.get(0);
+            System.out.println("There are " + numViews + " views");
+            XrViewConfigurationView.Buffer viewConfigurations = XrViewConfigurationView.callocStack(numViews, stack);
+            for (int viewIndex = 0; viewIndex < numViews; viewIndex++) {
+                viewConfigurations.get(viewIndex).type(XR_TYPE_VIEW_CONFIGURATION_VIEW);
+            }
+            xrCheck(xrEnumerateViewConfigurationViews(xrInstance, xrSystemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, pNumViews, viewConfigurations), "EnumerateViewConfigurationViews");
+
+            this.swapchains = new XrSwapchain[numViews];
+            for (int swapchainIndex = 0; swapchainIndex < numViews; swapchainIndex++) {
+                XrViewConfigurationView viewConfig = viewConfigurations.get(swapchainIndex);
+
+                XrSwapchainCreateInfo ciSwapchain = XrSwapchainCreateInfo.callocStack(stack);
+                ciSwapchain.type(XR_TYPE_SWAPCHAIN_CREATE_INFO);
+                ciSwapchain.createFlags(0);
+                ciSwapchain.usageFlags(
+                    XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
+                    XR_SWAPCHAIN_USAGE_SAMPLED_BIT
+                );
+                ciSwapchain.format(swapchainFormat);
+                ciSwapchain.width(viewConfig.recommendedImageRectWidth());
+                ciSwapchain.height(viewConfig.recommendedImageRectHeight());
+                ciSwapchain.sampleCount(viewConfig.recommendedSwapchainSampleCount());
+                System.out.println("Creating a swapchain of " +
+                                   viewConfig.recommendedImageRectWidth() + " x " +
+                                   viewConfig.recommendedImageRectHeight() + " with " +
+                                   viewConfig.recommendedSwapchainSampleCount() + " samples");
+                ciSwapchain.mipCount(1);
+                ciSwapchain.arraySize(1);
+                ciSwapchain.faceCount(1);
+
+                PointerBuffer pSwapchain = stack.callocPointer(1);
+                xrCheck(xrCreateSwapchain(xrVkSession, ciSwapchain, pSwapchain), "CreateSwapchain");
+                this.swapchains[swapchainIndex] = new XrSwapchain(pSwapchain.get(0), xrVkSession);
+            }
+        }
+    }
+
     private void updateSessionState(MemoryStack stack) {
         // Use malloc instead of calloc because this will be called frequently
         XrEventDataBuffer pollEventData = XrEventDataBuffer.mallocStack(stack);
@@ -502,7 +602,7 @@ public class HelloOpenXRVK {
     private void loopXrSession() {
 
         // This is a safety check for debugging. Set to 0 to disable this.
-        long endTime = System.currentTimeMillis() + 5_000;
+        long endTime = System.currentTimeMillis() + 500;
 
         boolean startedSession = false;
 
@@ -597,6 +697,16 @@ public class HelloOpenXRVK {
         }
     }
 
+    private void destroyRenderResources() {
+        if (swapchains != null) {
+            for (XrSwapchain swapchain : swapchains) {
+                if (swapchain != null) {
+                    xrDestroySwapchain(swapchain);
+                }
+            }
+        }
+    }
+
     private void destroyXrVkSession() {
         if (xrVkSession != null) {
             xrDestroySession(xrVkSession);
@@ -622,5 +732,28 @@ public class HelloOpenXRVK {
         if (result != VK_SUCCESS) {
             throw new RuntimeException("Vulkan function " + functionName + " returned " + result);
         }
+    }
+
+    private static String findConstantMeaning(Class<?> containingClass, Predicate<String> constantFilter, Object constant) {
+        Field[] fields = containingClass.getFields();
+        for (Field field : fields) {
+            if (Modifier.isStatic(field.getModifiers()) && constantFilter.test(field.getName())) {
+                try {
+                    Object value = field.get(null);
+                    if (value instanceof Number && constant instanceof Number) {
+                        if (((Number) value).longValue() == ((Number) constant).longValue()) {
+                            return field.getName();
+                        }
+                    }
+                    if (constant.equals(value)) {
+                        return field.getName();
+                    }
+                } catch (IllegalAccessException ex) {
+                    // Ignore private fields
+                }
+            }
+        }
+
+        return null;
     }
 }
