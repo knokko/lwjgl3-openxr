@@ -27,6 +27,29 @@ public class HelloOpenXRVK {
 
     private static final String VK_LAYER_LUNARG_STANDARD_VALIDATION = "VK_LAYER_LUNARG_standard_validation";
 
+    private static class SwapchainWrapper {
+
+        final XrSwapchain swapchain;
+        final int width, height;
+        final long[] images;
+
+        SwapchainWrapper(XrSwapchain swapchain, int width, int height, long[] images) {
+            if (swapchain == null) throw new NullPointerException("swapchain");
+            this.swapchain = swapchain;
+            if (width <= 0) throw new IllegalArgumentException("width is " + width);
+            this.width = width;
+            if (height <= 0) throw new IllegalArgumentException("height is " + height);
+            this.height = height;
+            if (images == null) throw new IllegalArgumentException("images are null");
+            for (long image : images) {
+                if (image == 0) {
+                    throw new IllegalArgumentException("An image is 0");
+                }
+            }
+            this.images = images;
+        }
+    }
+
     public static void main(String[] args) {
         XR.create();
 
@@ -48,8 +71,11 @@ public class HelloOpenXRVK {
     private int vkQueueFamilyIndex;
     private int vkQueueIndex;
 
-    private XrSwapchain[] swapchains;
+    private SwapchainWrapper[] swapchains;
+    private int viewConfiguration;
     private int swapchainFormat;
+
+    private XrSpace renderSpace;
 
     private void start() {
         try {
@@ -481,7 +507,36 @@ public class HelloOpenXRVK {
         }
     }
 
+    private static XrPosef identityPose(MemoryStack stack) {
+        XrQuaternionf poseOrientation = XrQuaternionf.callocStack(stack);
+        poseOrientation.set(0, 0, 0, 1);
+
+        XrVector3f posePosition = XrVector3f.callocStack(stack);
+        posePosition.set(0, 0, 0);
+
+        return XrPosef.callocStack(stack).set(poseOrientation, posePosition);
+    }
+
     private void createRenderResources() {
+        createSwapchains();
+
+        try (MemoryStack stack = stackPush()) {
+
+            XrReferenceSpaceCreateInfo ciReferenceSpace = XrReferenceSpaceCreateInfo.callocStack(stack);
+            ciReferenceSpace.type(XR_TYPE_REFERENCE_SPACE_CREATE_INFO);
+            // TODO Using STAGE would be better, but it is not guaranteed to be supported.
+            //  This example doesn't need it, but applications that do need it could do some kind of calibration if
+            //  STATE is not supported.
+            ciReferenceSpace.referenceSpaceType(XR_REFERENCE_SPACE_TYPE_LOCAL);
+            ciReferenceSpace.poseInReferenceSpace(identityPose(stack));
+
+            PointerBuffer pRenderSpace = stack.callocPointer(1);
+            xrCheck(xrCreateReferenceSpace(xrVkSession, ciReferenceSpace, pRenderSpace), "CreateReferenceSpace");
+            renderSpace = new XrSpace(pRenderSpace.get(0), xrVkSession);
+        }
+    }
+
+    private void createSwapchains() {
         try (MemoryStack stack = stackPush()) {
 
             IntBuffer pNumFormats = stack.callocInt(1);
@@ -492,9 +547,11 @@ public class HelloOpenXRVK {
             xrCheck(xrEnumerateSwapchainFormats(xrVkSession, pNumFormats, formats), "EnumerateSwapchainFormats");
 
             // SRGB formats are preferred due to the human perception of colors
+            // Non-alpha formats are preferred because I don't intend to use it and it would spare memory
             int[] preferredFormats = {
                 VK_FORMAT_R8G8B8_SRGB, VK_FORMAT_B8G8R8_SRGB,
                 VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB,
+                VK_FORMAT_R8G8B8_UNORM, VK_FORMAT_B8G8R8_UNORM,
                 VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM
             };
             boolean[] hasPreferredFormats = new boolean[preferredFormats.length];
@@ -534,19 +591,44 @@ public class HelloOpenXRVK {
 
             System.out.println("Chose swapchain format " + swapchainFormat);
 
+            IntBuffer pNumViewConfigurations = stack.callocInt(1);
+            xrEnumerateViewConfigurations(xrInstance, xrSystemId, pNumViewConfigurations, null);
+            int numViewConfigurations = pNumViewConfigurations.get(0);
+            System.out.println("There are " + numViewConfigurations + " view configurations:");
+            IntBuffer viewConfigurations = stack.callocInt(numViewConfigurations);
+            xrCheck(xrEnumerateViewConfigurations(xrInstance, xrSystemId, pNumViewConfigurations, viewConfigurations), "EnumerateViewConfigurations");
+
+            boolean hasPrimarySterio = false;
+            for (int viewIndex = 0; viewIndex < numViewConfigurations; viewIndex++) {
+                int viewConfiguration = viewConfigurations.get(viewIndex);
+                System.out.println(findConstantMeaning(XR10.class, constantName -> constantName.startsWith("XR_VIEW_CONFIGURATION_TYPE_"), viewConfiguration) + " (" + viewConfiguration + ")");
+                if (viewConfiguration == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) {
+                    hasPrimarySterio = true;
+                }
+            }
+            System.out.println("~~~~~~~~~~");
+
+            // I prefer primary stereo. If that is not available, I will go for the first best alternative.
+            if (hasPrimarySterio) {
+                viewConfiguration = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+            } else {
+                viewConfiguration = viewConfigurations.get(0);
+            }
+            System.out.println("Chose " + viewConfiguration);
+
             IntBuffer pNumViews = stack.callocInt(1);
-            xrEnumerateViewConfigurationViews(xrInstance, xrSystemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, pNumViews, null);
+            xrEnumerateViewConfigurationViews(xrInstance, xrSystemId, viewConfiguration, pNumViews, null);
             int numViews = pNumViews.get(0);
             System.out.println("There are " + numViews + " views");
-            XrViewConfigurationView.Buffer viewConfigurations = XrViewConfigurationView.callocStack(numViews, stack);
+            XrViewConfigurationView.Buffer viewConfigurationViews = XrViewConfigurationView.callocStack(numViews, stack);
             for (int viewIndex = 0; viewIndex < numViews; viewIndex++) {
-                viewConfigurations.get(viewIndex).type(XR_TYPE_VIEW_CONFIGURATION_VIEW);
+                viewConfigurationViews.get(viewIndex).type(XR_TYPE_VIEW_CONFIGURATION_VIEW);
             }
-            xrCheck(xrEnumerateViewConfigurationViews(xrInstance, xrSystemId, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, pNumViews, viewConfigurations), "EnumerateViewConfigurationViews");
+            xrCheck(xrEnumerateViewConfigurationViews(xrInstance, xrSystemId, viewConfiguration, pNumViews, viewConfigurationViews), "EnumerateViewConfigurationViews");
 
-            this.swapchains = new XrSwapchain[numViews];
+            this.swapchains = new SwapchainWrapper[numViews];
             for (int swapchainIndex = 0; swapchainIndex < numViews; swapchainIndex++) {
-                XrViewConfigurationView viewConfig = viewConfigurations.get(swapchainIndex);
+                XrViewConfigurationView viewConfig = viewConfigurationViews.get(swapchainIndex);
 
                 XrSwapchainCreateInfo ciSwapchain = XrSwapchainCreateInfo.callocStack(stack);
                 ciSwapchain.type(XR_TYPE_SWAPCHAIN_CREATE_INFO);
@@ -560,18 +642,102 @@ public class HelloOpenXRVK {
                 ciSwapchain.height(viewConfig.recommendedImageRectHeight());
                 ciSwapchain.sampleCount(viewConfig.recommendedSwapchainSampleCount());
                 System.out.println("Creating a swapchain of " +
-                                   viewConfig.recommendedImageRectWidth() + " x " +
-                                   viewConfig.recommendedImageRectHeight() + " with " +
-                                   viewConfig.recommendedSwapchainSampleCount() + " samples");
+                                   ciSwapchain.width() + " x " +
+                                   ciSwapchain.height() + " with " +
+                                   ciSwapchain.sampleCount() + " samples");
                 ciSwapchain.mipCount(1);
                 ciSwapchain.arraySize(1);
                 ciSwapchain.faceCount(1);
 
                 PointerBuffer pSwapchain = stack.callocPointer(1);
                 xrCheck(xrCreateSwapchain(xrVkSession, ciSwapchain, pSwapchain), "CreateSwapchain");
-                this.swapchains[swapchainIndex] = new XrSwapchain(pSwapchain.get(0), xrVkSession);
+                XrSwapchain swapchain = new XrSwapchain(pSwapchain.get(0), xrVkSession);
+
+
+                IntBuffer pNumImages = stack.callocInt(1);
+                xrEnumerateSwapchainImages(swapchain, pNumImages, null);
+
+                int numImages = pNumImages.get(0);
+                System.out.println("Swapchain " + swapchainIndex + " has " + numImages + " images");
+                XrSwapchainImageVulkanKHR.Buffer images = XrSwapchainImageVulkanKHR.callocStack(numImages, stack);
+                for (int imageIndex = 0; imageIndex < numImages; imageIndex++) {
+                    images.get(imageIndex).type(XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR);
+                }
+                xrCheck(xrEnumerateSwapchainImages(
+                    swapchain, pNumImages,
+                    XrSwapchainImageBaseHeader.create(images.address(), images.capacity())
+                ), "EnumerateSwapchainImages");
+
+                long[] imagesArray = new long[numImages];
+                for (int imageIndex = 0; imageIndex < numImages; imageIndex++) {
+                    imagesArray[imageIndex] = images.get(imageIndex).image();
+                }
+
+                this.swapchains[swapchainIndex] = new SwapchainWrapper(
+                    new XrSwapchain(pSwapchain.get(0), xrVkSession),
+                    ciSwapchain.width(), ciSwapchain.height(),
+                    imagesArray
+                );
             }
         }
+    }
+
+    private XrCompositionLayerProjectionView.Buffer createProjectionViews(MemoryStack stack, long displayTime) {
+
+        XrViewLocateInfo viewLocateInfo = XrViewLocateInfo.callocStack(stack);
+        viewLocateInfo.type(XR_TYPE_VIEW_LOCATE_INFO);
+        viewLocateInfo.viewConfigurationType(viewConfiguration);
+        viewLocateInfo.displayTime(displayTime);
+        viewLocateInfo.space(renderSpace);
+
+        XrViewState viewState = XrViewState.callocStack(stack);
+        viewState.type(XR_TYPE_VIEW_STATE);
+
+        IntBuffer pNumViews = stack.ints(swapchains.length);
+        XrView.Buffer views = XrView.callocStack(swapchains.length, stack);
+        for (int viewIndex = 0; viewIndex < swapchains.length; viewIndex++) {
+            views.get(viewIndex).type(XR_TYPE_VIEW);
+        }
+
+        int locateViewResult = xrLocateViews(xrVkSession, viewLocateInfo, viewState, pNumViews, views);
+        if (locateViewResult != XR_SESSION_LOSS_PENDING) {
+            xrCheck(locateViewResult, "LocateViews");
+        }
+
+        long viewFlags = viewState.viewStateFlags();
+        if ((viewFlags & XR_VIEW_STATE_POSITION_VALID_BIT) == 0) {
+            System.out.println("View position invalid; abort rendering this frame");
+            return null;
+        }
+        if ((viewFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) == 0) {
+            System.out.println("View orientation invalid; abort rendering this frame");
+            return null;
+        }
+
+        XrCompositionLayerProjectionView.Buffer projectionViews = XrCompositionLayerProjectionView.callocStack(swapchains.length, stack);
+        for (int viewIndex = 0; viewIndex < swapchains.length; viewIndex++) {
+
+            SwapchainWrapper swapchain = swapchains[viewIndex];
+            XrRect2Di subImageRect = XrRect2Di.callocStack(stack);
+            // By using calloc, it will automatically get the desired value of 0
+            subImageRect.offset(XrOffset2Di.callocStack(stack));
+            subImageRect.extent(XrExtent2Di.callocStack(stack).set(swapchain.width, swapchain.height));
+
+            XrSwapchainSubImage subImage = XrSwapchainSubImage.callocStack(stack);
+            subImage.swapchain(swapchain.swapchain);
+            subImage.imageRect(subImageRect);
+            subImage.imageArrayIndex(0);
+
+            XrView currentView = views.get(viewIndex);
+
+            XrCompositionLayerProjectionView projectionView = projectionViews.get(viewIndex);
+            projectionView.type(XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW);
+            projectionView.pose(currentView.pose());
+            projectionView.fov(currentView.fov());
+            projectionView.subImage(subImage);
+        }
+
+        return projectionViews;
     }
 
     private void updateSessionState(MemoryStack stack) {
@@ -647,7 +813,7 @@ public class HelloOpenXRVK {
                 if (xrSessionState == XR_SESSION_STATE_READY && !startedSession) {
                     XrSessionBeginInfo biSession = XrSessionBeginInfo.callocStack(stack);
                     biSession.type(XR_TYPE_SESSION_BEGIN_INFO);
-                    biSession.primaryViewConfigurationType(XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO);
+                    biSession.primaryViewConfigurationType(viewConfiguration);
 
                     System.out.println("Begin session");
                     xrCheck(xrBeginSession(xrVkSession, biSession), "BeginSession");
@@ -676,8 +842,50 @@ public class HelloOpenXRVK {
 
                     PointerBuffer layers = null;
                     if (frameState.shouldRender()) {
-                        // TODO Render something and assign something to the layers variable
-                        System.out.println("Render...");
+
+
+                        XrCompositionLayerProjection layer = XrCompositionLayerProjection.callocStack(stack);
+                        layer.type(XR_TYPE_COMPOSITION_LAYER_PROJECTION);
+                        // If we were to use alpha, we should set the alpha layer flag
+                        layer.layerFlags(0);
+                        layer.space(renderSpace);
+
+                        XrCompositionLayerProjectionView.Buffer projectionViews = createProjectionViews(stack, frameState.predictedDisplayTime());
+                        if (projectionViews != null) {
+                            layer.views(projectionViews);
+                            layers = stack.pointers(layer.address());
+                        }
+
+                        for (int swapchainIndex = 0; swapchainIndex < swapchains.length; swapchainIndex++) {
+                            XrSwapchain swapchain = this.swapchains[swapchainIndex].swapchain;
+                            IntBuffer pImageIndex = stack.callocInt(1);
+                            int acquireResult = xrAcquireSwapchainImage(swapchain, null, pImageIndex);
+                            if (acquireResult != XR_SESSION_LOSS_PENDING) {
+                                xrCheck(acquireResult, "AcquireSwapchainImage");
+                            }
+
+                            int imageIndex = pImageIndex.get(0);
+                            long swapchainImage = swapchains[swapchainIndex].images[imageIndex];
+
+                            XrSwapchainImageWaitInfo wiSwapchainImage = XrSwapchainImageWaitInfo.callocStack(stack);
+                            wiSwapchainImage.type(XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO);
+                            // Time out after 1 second. If we would have to wait so long, something is seriously wrong
+                            wiSwapchainImage.timeout(1_000_000_000);
+
+                            int waitImageResult = xrWaitSwapchainImage(swapchain, wiSwapchainImage);
+                            if (waitImageResult != XR_SESSION_LOSS_PENDING) {
+                                xrCheck(waitImageResult, "WaitSwapchainImage");
+                            }
+
+                            System.out.println("Render on image " + swapchainImage);
+
+                            // TODO Render and wait until rendering has finished
+
+                            int releaseResult = xrReleaseSwapchainImage(swapchain, null);
+                            if (releaseResult != XR_SESSION_LOSS_PENDING) {
+                                xrCheck(releaseResult, "ReleaseSwapchainImage");
+                            }
+                        }
                     } else {
                         System.out.println("Skip frame");
                     }
@@ -699,11 +907,15 @@ public class HelloOpenXRVK {
 
     private void destroyRenderResources() {
         if (swapchains != null) {
-            for (XrSwapchain swapchain : swapchains) {
+            for (SwapchainWrapper swapchain : swapchains) {
                 if (swapchain != null) {
-                    xrDestroySwapchain(swapchain);
+                    xrDestroySwapchain(swapchain.swapchain);
                 }
             }
+        }
+
+        if (renderSpace != null) {
+            xrDestroySpace(renderSpace);
         }
     }
 
@@ -724,13 +936,15 @@ public class HelloOpenXRVK {
 
     private static void xrCheck(int result, String functionName) {
         if (result != XR_SUCCESS) {
-            throw new RuntimeException("OpenXR function " + functionName + " returned " + result);
+            String constantName = findConstantMeaning(XR10.class, candidateConstant -> candidateConstant.startsWith("XR_ERROR_"), result);
+            throw new RuntimeException("OpenXR function " + functionName + " returned " + result + " (" + constantName + ")");
         }
     }
 
     private static void vkCheck(int result, String functionName) {
         if (result != VK_SUCCESS) {
-            throw new RuntimeException("Vulkan function " + functionName + " returned " + result);
+            String constantName = findConstantMeaning(VK10.class, candidateConstant -> candidateConstant.startsWith("VK_ERROR_"), result);
+            throw new RuntimeException("Vulkan function " + functionName + " returned " + result + " (" + constantName + ")");
         }
     }
 
