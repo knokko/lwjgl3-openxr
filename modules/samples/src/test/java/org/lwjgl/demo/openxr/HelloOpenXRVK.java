@@ -863,8 +863,6 @@ public class HelloOpenXRVK {
                         xrCheck(beginResult, "BeginFrame");
                     }
 
-                    System.out.println("Begin frame");
-
                     PointerBuffer layers = null;
                     if (frameState.shouldRender()) {
 
@@ -884,13 +882,10 @@ public class HelloOpenXRVK {
                         for (int swapchainIndex = 0; swapchainIndex < swapchains.length; swapchainIndex++) {
                             XrSwapchain swapchain = this.swapchains[swapchainIndex].swapchain;
                             IntBuffer pImageIndex = stack.callocInt(1);
-                            System.out.println("Acquire swapchain image...");
                             int acquireResult = xrAcquireSwapchainImage(swapchain, null, pImageIndex);
                             if (acquireResult != XR_SESSION_LOSS_PENDING) {
                                 xrCheck(acquireResult, "AcquireSwapchainImage");
                             }
-
-                            System.out.println("Acquired swapchain image");
 
                             int imageIndex = pImageIndex.get(0);
                             long swapchainImage = swapchains[swapchainIndex].images[imageIndex];
@@ -905,9 +900,6 @@ public class HelloOpenXRVK {
                                 xrCheck(waitImageResult, "WaitSwapchainImage");
                             }
 
-                            System.out.println("Render on image " + swapchainImage);
-
-                            // TODO Render and wait until rendering has finished
                             // For now, we will simply create and destroy command buffers every frame
                             VkCommandBufferAllocateInfo aiCommandBuffer = VkCommandBufferAllocateInfo.callocStack(stack);
                             aiCommandBuffer.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
@@ -949,8 +941,6 @@ public class HelloOpenXRVK {
                             if (releaseResult != XR_SESSION_LOSS_PENDING) {
                                 xrCheck(releaseResult, "ReleaseSwapchainImage");
                             }
-
-                            System.out.println("Released swapchain image");
                         }
                     } else {
                         System.out.println("Skip frame");
@@ -966,8 +956,6 @@ public class HelloOpenXRVK {
                     if (endResult != XR_SESSION_LOSS_PENDING) {
                         xrCheck(endResult, "EndFrame");
                     }
-
-                    System.out.println("Ended frame");
                 }
             }
         }
