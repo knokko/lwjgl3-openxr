@@ -68,8 +68,10 @@ public class HelloOpenXRVK {
     private long vkDebugMessenger;
     private VkPhysicalDevice vkPhysicalDevice;
     private VkDevice vkDevice;
+    private VkQueue vkQueue;
     private int vkQueueFamilyIndex;
     private int vkQueueIndex;
+    private long vkCommandPool;
 
     private SwapchainWrapper[] swapchains;
     private int viewConfiguration;
@@ -467,7 +469,11 @@ public class HelloOpenXRVK {
 
             PointerBuffer pDevice = stack.callocPointer(1);
             vkCheck(vkCreateDevice(vkPhysicalDevice, ciDevice, null, pDevice), "CreateDevice");
-            vkDevice = new VkDevice(pDevice.get(0), vkPhysicalDevice, ciDevice);
+            this.vkDevice = new VkDevice(pDevice.get(0), vkPhysicalDevice, ciDevice);
+
+            PointerBuffer pQueue = stack.callocPointer(1);
+            vkGetDeviceQueue(vkDevice, vkQueueFamilyIndex, vkQueueIndex, pQueue);
+            this.vkQueue = new VkQueue(pQueue.get(0), vkDevice);
         }
     }
 
@@ -519,6 +525,7 @@ public class HelloOpenXRVK {
 
     private void createRenderResources() {
         createSwapchains();
+        createCommandPools();
 
         try (MemoryStack stack = stackPush()) {
 
@@ -533,6 +540,22 @@ public class HelloOpenXRVK {
             PointerBuffer pRenderSpace = stack.callocPointer(1);
             xrCheck(xrCreateReferenceSpace(xrVkSession, ciReferenceSpace, pRenderSpace), "CreateReferenceSpace");
             renderSpace = new XrSpace(pRenderSpace.get(0), xrVkSession);
+        }
+    }
+
+    private void createCommandPools() {
+        try (MemoryStack stack = stackPush()) {
+
+            VkCommandPoolCreateInfo ciCommandPool = VkCommandPoolCreateInfo.callocStack(stack);
+            ciCommandPool.sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+            // In this tutorial, we will create and destroy the command buffers every frame
+            ciCommandPool.flags(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT);
+            ciCommandPool.queueFamilyIndex(vkQueueFamilyIndex);
+
+            LongBuffer pCommandPool = stack.callocLong(1);
+            vkCheck(vkCreateCommandPool(vkDevice, ciCommandPool, null, pCommandPool), "CreateCommandPool");
+
+            this.vkCommandPool = pCommandPool.get(0);
         }
     }
 
@@ -840,6 +863,8 @@ public class HelloOpenXRVK {
                         xrCheck(beginResult, "BeginFrame");
                     }
 
+                    System.out.println("Begin frame");
+
                     PointerBuffer layers = null;
                     if (frameState.shouldRender()) {
 
@@ -859,10 +884,13 @@ public class HelloOpenXRVK {
                         for (int swapchainIndex = 0; swapchainIndex < swapchains.length; swapchainIndex++) {
                             XrSwapchain swapchain = this.swapchains[swapchainIndex].swapchain;
                             IntBuffer pImageIndex = stack.callocInt(1);
+                            System.out.println("Acquire swapchain image...");
                             int acquireResult = xrAcquireSwapchainImage(swapchain, null, pImageIndex);
                             if (acquireResult != XR_SESSION_LOSS_PENDING) {
                                 xrCheck(acquireResult, "AcquireSwapchainImage");
                             }
+
+                            System.out.println("Acquired swapchain image");
 
                             int imageIndex = pImageIndex.get(0);
                             long swapchainImage = swapchains[swapchainIndex].images[imageIndex];
@@ -880,11 +908,49 @@ public class HelloOpenXRVK {
                             System.out.println("Render on image " + swapchainImage);
 
                             // TODO Render and wait until rendering has finished
+                            // For now, we will simply create and destroy command buffers every frame
+                            VkCommandBufferAllocateInfo aiCommandBuffer = VkCommandBufferAllocateInfo.callocStack(stack);
+                            aiCommandBuffer.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+                            aiCommandBuffer.commandPool(vkCommandPool);
+                            aiCommandBuffer.commandBufferCount(1);
+                            aiCommandBuffer.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+
+                            PointerBuffer pCommandBuffer = stack.callocPointer(1);
+                            vkCheck(vkAllocateCommandBuffers(vkDevice, aiCommandBuffer, pCommandBuffer), "AllocateCommandBuffers");
+
+                            VkCommandBuffer commandBuffer = new VkCommandBuffer(pCommandBuffer.get(0), vkDevice);
+
+                            VkCommandBufferBeginInfo biCommandBuffer = VkCommandBufferBeginInfo.callocStack(stack);
+                            biCommandBuffer.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+                            biCommandBuffer.flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+                            vkCheck(vkBeginCommandBuffer(commandBuffer, biCommandBuffer), "BeginCommandBuffer");
+                            // TODO Record render commands
+                            vkCheck(vkEndCommandBuffer(commandBuffer), "EndCommandBuffer");
+
+                            VkSubmitInfo submitInfo = VkSubmitInfo.callocStack(stack);
+                            submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+                            submitInfo.pCommandBuffers(stack.pointers(commandBuffer.address()));
+
+                            VkFenceCreateInfo ciFence = VkFenceCreateInfo.callocStack(stack);
+                            ciFence.sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+
+                            // Not the most efficient way of doing things, but should be sufficient for an example
+                            LongBuffer pFence = stack.callocLong(1);
+                            vkCheck(vkCreateFence(vkDevice, ciFence, null, pFence), "CreateFence");
+                            long fence = pFence.get(0);
+
+                            vkCheck(vkQueueSubmit(vkQueue, submitInfo, fence), "QueueSubmit");
+                            vkCheck(vkWaitForFences(vkDevice, pFence, true, 1_000_000_000), "WaitForFences");
+                            vkFreeCommandBuffers(vkDevice, this.vkCommandPool, commandBuffer);
+                            vkDestroyFence(vkDevice, fence, null);
 
                             int releaseResult = xrReleaseSwapchainImage(swapchain, null);
                             if (releaseResult != XR_SESSION_LOSS_PENDING) {
                                 xrCheck(releaseResult, "ReleaseSwapchainImage");
                             }
+
+                            System.out.println("Released swapchain image");
                         }
                     } else {
                         System.out.println("Skip frame");
@@ -900,6 +966,8 @@ public class HelloOpenXRVK {
                     if (endResult != XR_SESSION_LOSS_PENDING) {
                         xrCheck(endResult, "EndFrame");
                     }
+
+                    System.out.println("Ended frame");
                 }
             }
         }
@@ -912,6 +980,10 @@ public class HelloOpenXRVK {
                     xrDestroySwapchain(swapchain.swapchain);
                 }
             }
+        }
+
+        if (vkCommandPool != 0) {
+            vkDestroyCommandPool(vkDevice, vkCommandPool, null);
         }
 
         if (renderSpace != null) {
