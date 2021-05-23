@@ -63,6 +63,7 @@ public class HelloOpenXRVK {
 
     private XrSession xrVkSession;
     private int xrSessionState;
+    private boolean missingXrDebug;
 
     private VkInstance vkInstance;
     private long vkDebugMessenger;
@@ -134,7 +135,7 @@ public class HelloOpenXRVK {
             System.out.println("~~~~~~~~~~~~~~~~~~");
             PointerBuffer extensions    = stack.mallocPointer(numExtensions);
             boolean missingVulkan = true;
-            boolean missingDebug = true;
+            missingXrDebug = true;
             while (properties.hasRemaining()) {
                 XrExtensionProperties prop          = properties.get();
                 String                extensionName = prop.extensionNameString();
@@ -144,7 +145,7 @@ public class HelloOpenXRVK {
                     missingVulkan = false;
                 }
                 if (extensionName.equals("XR_EXT_debug_utils")) {
-                    missingDebug = false;
+                    missingXrDebug = false;
                 }
             }
             extensions.rewind();
@@ -159,7 +160,7 @@ public class HelloOpenXRVK {
             applicationInfo.applicationName(stack.UTF8("DummyXRVK"));
 
             PointerBuffer wantedExtensions;
-            if (missingDebug) {
+            if (missingXrDebug) {
                 wantedExtensions = stack.callocPointer(1);
             } else {
                 wantedExtensions = stack.callocPointer(2);
@@ -190,32 +191,6 @@ public class HelloOpenXRVK {
             PointerBuffer instancePtr = stack.mallocPointer(1);
             xrCheck(XR10.xrCreateInstance(createInfo, instancePtr), "CreateInstance");
             xrInstance = new XrInstance(instancePtr.get(0), createInfo);
-
-            if (!missingDebug) {
-                XrDebugUtilsMessengerCreateInfoEXT ciDebugUtils = XrDebugUtilsMessengerCreateInfoEXT.callocStack(stack);
-                ciDebugUtils.type(XR_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT);
-                ciDebugUtils.messageSeverities(
-                    XR_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
-                    XR_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                    XR_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
-                );
-                ciDebugUtils.messageTypes(
-                    XR_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-                    XR_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                    XR_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
-                    XR_DEBUG_UTILS_MESSAGE_TYPE_CONFORMANCE_BIT_EXT
-                );
-                ciDebugUtils.userCallback((messageSeverity, messageTypes, pCallbackData, userData) -> {
-                    XrDebugUtilsMessengerCallbackDataEXT callbackData = XrDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
-                    System.out.println("XR Debug Utils: " + callbackData.messageString());
-                    return 0;
-                });
-
-                System.out.println("Enabling OpenXR debug utils");
-                PointerBuffer pMessenger = stack.callocPointer(1);
-                xrCheck(xrCreateDebugUtilsMessengerEXT(xrInstance, ciDebugUtils, pMessenger), "CreateDebugUtilsMessenger");
-                xrDebugMessenger = null; // TODO Find a way to create a proper instance of this
-            }
         }
     }
 
@@ -243,10 +218,10 @@ public class HelloOpenXRVK {
             long minApiVersion = graphicsRequirements.minApiVersionSupported();
             long maxApiVersion = graphicsRequirements.maxApiVersionSupported();
             long minVkMajor = XR_VERSION_MAJOR(minApiVersion);
-            long minVkMinor = XR10.VK_VERSION_MINOR(minApiVersion); // TODO Typo?
-            long minVkPatch = XR10.VK_VERSION_PATCH(minApiVersion); // Also typo?
+            long minVkMinor = XR_VERSION_MINOR(minApiVersion);
+            long minVkPatch = XR_VERSION_PATCH(minApiVersion);
             System.out.println("Minimum Vulkan API version: " + minVkMajor + "." + minVkMinor + "." + minVkPatch);
-            System.out.println("Maximum Vulkan API version: " + XR_VERSION_MAJOR(maxApiVersion) + "." + XR10.VK_VERSION_MINOR(maxApiVersion) + "." + XR10.VK_VERSION_PATCH(maxApiVersion));
+            System.out.println("Maximum Vulkan API version: " + XR_VERSION_MAJOR(maxApiVersion) + "." + XR_VERSION_MINOR(maxApiVersion) + "." + XR_VERSION_PATCH(maxApiVersion));
 
             VkApplicationInfo appInfo = VkApplicationInfo.callocStack(stack);
             appInfo.sType(VK_STRUCTURE_TYPE_APPLICATION_INFO);
@@ -510,6 +485,32 @@ public class HelloOpenXRVK {
             xrVkSession = new XrSession(pSession.get(0), xrInstance);
             xrSessionState = XR_SESSION_STATE_IDLE;
             System.out.println("Session is " + xrVkSession);
+
+            if (!missingXrDebug) {
+                XrDebugUtilsMessengerCreateInfoEXT ciDebugUtils = XrDebugUtilsMessengerCreateInfoEXT.callocStack(stack);
+                ciDebugUtils.type(XR_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT);
+                ciDebugUtils.messageSeverities(
+                    XR_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                    XR_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                    XR_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+                );
+                ciDebugUtils.messageTypes(
+                    XR_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                    XR_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                    XR_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT |
+                    XR_DEBUG_UTILS_MESSAGE_TYPE_CONFORMANCE_BIT_EXT
+                );
+                ciDebugUtils.userCallback((messageSeverity, messageTypes, pCallbackData, userData) -> {
+                    XrDebugUtilsMessengerCallbackDataEXT callbackData = XrDebugUtilsMessengerCallbackDataEXT.create(pCallbackData);
+                    System.out.println("XR Debug Utils: " + callbackData.messageString());
+                    return 0;
+                });
+
+                System.out.println("Enabling OpenXR debug utils");
+                PointerBuffer pMessenger = stack.callocPointer(1);
+                xrCheck(xrCreateDebugUtilsMessengerEXT(xrInstance, ciDebugUtils, pMessenger), "CreateDebugUtilsMessenger");
+                xrDebugMessenger = new XrDebugUtilsMessengerEXT(pMessenger.get(0), xrVkSession.getCapabilities());
+            }
         }
     }
 
