@@ -21,6 +21,7 @@ import static org.lwjgl.openxr.XR10.*;
 import static org.lwjgl.system.MemoryStack.*;
 import static org.lwjgl.system.MemoryUtil.*;
 import static org.lwjgl.vulkan.EXTDebugUtils.*;
+import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 public class HelloOpenXRVK {
@@ -30,10 +31,10 @@ public class HelloOpenXRVK {
     private static class SwapchainWrapper {
 
         final XrSwapchain swapchain;
-        final int width, height;
+        final int width, height, numSamples;
         final long[] images;
 
-        SwapchainWrapper(XrSwapchain swapchain, int width, int height, long[] images) {
+        SwapchainWrapper(XrSwapchain swapchain, int width, int height, int numSamples, long[] images) {
             if (swapchain == null) throw new NullPointerException("swapchain");
             this.swapchain = swapchain;
             if (width <= 0) throw new IllegalArgumentException("width is " + width);
@@ -41,6 +42,8 @@ public class HelloOpenXRVK {
             if (height <= 0) throw new IllegalArgumentException("height is " + height);
             this.height = height;
             if (images == null) throw new IllegalArgumentException("images are null");
+            if (numSamples <= 0) throw new IllegalArgumentException("numSamples is " + numSamples);
+            this.numSamples = numSamples;
             for (long image : images) {
                 if (image == 0) {
                     throw new IllegalArgumentException("An image is 0");
@@ -73,6 +76,8 @@ public class HelloOpenXRVK {
     private int vkQueueFamilyIndex;
     private int vkQueueIndex;
     private long vkCommandPool;
+    private long vkRenderPass;
+    private long vkGraphicsPipeline;
 
     private SwapchainWrapper[] swapchains;
     private int viewConfiguration;
@@ -527,7 +532,12 @@ public class HelloOpenXRVK {
     private void createRenderResources() {
         createSwapchains();
         createCommandPools();
+        createRenderPass();
+        createGraphicsPipeline();
+        createRenderSpace();
+    }
 
+    private void createRenderSpace() {
         try (MemoryStack stack = stackPush()) {
 
             XrReferenceSpaceCreateInfo ciReferenceSpace = XrReferenceSpaceCreateInfo.callocStack(stack);
@@ -541,6 +551,113 @@ public class HelloOpenXRVK {
             PointerBuffer pRenderSpace = stack.callocPointer(1);
             xrCheck(xrCreateReferenceSpace(xrVkSession, ciReferenceSpace, pRenderSpace), "CreateReferenceSpace");
             renderSpace = new XrSpace(pRenderSpace.get(0), xrVkSession);
+        }
+    }
+
+    private void createRenderPass() {
+        try (MemoryStack stack = stackPush()) {
+
+            VkAttachmentDescription.Buffer attachments = VkAttachmentDescription.callocStack(1, stack);
+            VkAttachmentDescription colorAttachment = attachments.get(0);
+            colorAttachment.flags(0);
+            colorAttachment.format(this.swapchainFormat);
+            // TODO Take a closer look at this...
+            colorAttachment.samples(VK_SAMPLE_COUNT_1_BIT);
+            colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
+            colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);
+            colorAttachment.stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+            colorAttachment.stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            colorAttachment.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            colorAttachment.finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+            VkAttachmentReference.Buffer colorAttachmentRefs = VkAttachmentReference.callocStack(1, stack);
+            VkAttachmentReference colorAttachmentRef = colorAttachmentRefs.get(0);
+            colorAttachmentRef.attachment(0);
+            colorAttachmentRef.layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+            VkSubpassDescription.Buffer subpasses = VkSubpassDescription.callocStack(1, stack);
+            VkSubpassDescription subpass = subpasses.get(0);
+            subpass.flags(0);
+            subpass.pipelineBindPoint(VK_PIPELINE_BIND_POINT_GRAPHICS);
+            // For some reason, I have to specify the colorAttachmentCount explicitly
+            subpass.colorAttachmentCount(1);
+            subpass.pColorAttachments(colorAttachmentRefs);
+
+            VkRenderPassCreateInfo ciRenderPass = VkRenderPassCreateInfo.callocStack(stack);
+            ciRenderPass.sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
+            ciRenderPass.flags(0);
+            ciRenderPass.pAttachments(attachments);
+            ciRenderPass.pSubpasses(subpasses);
+
+            LongBuffer pRenderPass = stack.callocLong(1);
+            vkCheck(vkCreateRenderPass(vkDevice, ciRenderPass, null, pRenderPass), "CreateRenderPass");
+            this.vkRenderPass = pRenderPass.get(0);
+        }
+    }
+
+    private void createGraphicsPipeline() {
+        long vertexModule;
+        long fragmentModule;
+
+        try (MemoryStack stack = stackPush()) {
+
+            VkShaderModuleCreateInfo ciVertexModule = VkShaderModuleCreateInfo.callocStack(stack);
+            ciVertexModule.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+            ciVertexModule.pCode(getVertexShaderBytes());
+
+            LongBuffer pShaderModule = stack.callocLong(1);
+            vkCheck(vkCreateShaderModule(vkDevice, ciVertexModule, null, pShaderModule), "CreateShaderModule (vertex)");
+            vertexModule = pShaderModule.get(0);
+
+            VkShaderModuleCreateInfo ciFragmentModule = VkShaderModuleCreateInfo.callocStack(stack);
+            ciFragmentModule.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+            ciFragmentModule.pCode(getFragmentShaderBytes());
+
+            vkCheck(vkCreateShaderModule(vkDevice, ciFragmentModule, null, pShaderModule), "CreateShaderModule (fragment)");
+            fragmentModule = pShaderModule.get(0);
+        }
+
+        try (MemoryStack stack = stackPush()) {
+
+            VkShaderModuleCreateInfo ciVertexModule = VkShaderModuleCreateInfo.callocStack(stack);
+            ciVertexModule.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+            ciVertexModule.pCode(getVertexShaderBytes());
+
+            VkShaderModuleCreateInfo ciFragmentModule = VkShaderModuleCreateInfo.callocStack(stack);
+            ciFragmentModule.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
+            ciFragmentModule.pCode(getFragmentShaderBytes());
+
+            VkPipelineShaderStageCreateInfo.Buffer ciPipelineShaderStages = VkPipelineShaderStageCreateInfo.callocStack(2, stack);
+            VkPipelineShaderStageCreateInfo ciVertexStage = ciPipelineShaderStages.get(0);
+            ciVertexStage.sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            ciVertexStage.flags(0);
+            ciVertexStage.stage(VK_SHADER_STAGE_VERTEX_BIT);
+            ciVertexStage.module(vertexModule);
+            // TODO Look into this name
+            ciVertexStage.pName(stack.UTF8("main"));
+
+            // TODO Add ciFragmentStage
+            VkPipelineShaderStageCreateInfo ciFragmentStage = ciPipelineShaderStages.get(1);
+            ciFragmentStage.sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            ciFragmentStage.flags(0);
+            ciFragmentStage.stage(VK_SHADER_STAGE_FRAGMENT_BIT);
+            ciFragmentStage.module(fragmentModule);
+            // TODO Also look into this name
+            ciFragmentStage.pName(stack.UTF8("main"));
+
+            VkGraphicsPipelineCreateInfo.Buffer ciGraphicsPipelines = VkGraphicsPipelineCreateInfo.callocStack(1, stack);
+
+            // In this example, I will use only 1 graphics pipeline
+            VkGraphicsPipelineCreateInfo ciPipeline = ciGraphicsPipelines.get(0);
+            ciPipeline.sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
+            ciPipeline.flags(0);
+            ciPipeline.renderPass(this.vkRenderPass);
+            ciPipeline.pStages(ciPipelineShaderStages);
+            // TODO The rest of the values
+
+            LongBuffer pPipelines = stack.callocLong(1);
+            vkCheck(vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, ciGraphicsPipelines, null, pPipelines), "CreateGraphicsPipelines");
+            this.vkGraphicsPipeline = pPipelines.get(0);
         }
     }
 
@@ -699,7 +816,7 @@ public class HelloOpenXRVK {
 
                 this.swapchains[swapchainIndex] = new SwapchainWrapper(
                     new XrSwapchain(pSwapchain.get(0), xrVkSession),
-                    ciSwapchain.width(), ciSwapchain.height(),
+                    ciSwapchain.width(), ciSwapchain.height(), ciSwapchain.sampleCount(),
                     imagesArray
                 );
             }
@@ -977,6 +1094,10 @@ public class HelloOpenXRVK {
 
         if (renderSpace != null) {
             xrDestroySpace(renderSpace);
+        }
+
+        if (this.vkRenderPass != 0) {
+            vkDestroyRenderPass(vkDevice, vkRenderPass, null);
         }
     }
 
