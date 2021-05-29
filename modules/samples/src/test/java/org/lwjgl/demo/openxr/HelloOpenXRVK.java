@@ -9,6 +9,7 @@ import org.lwjgl.openxr.*;
 import org.lwjgl.system.*;
 import org.lwjgl.vulkan.*;
 
+import java.io.*;
 import java.lang.reflect.*;
 import java.nio.*;
 import java.util.*;
@@ -27,6 +28,12 @@ import static org.lwjgl.vulkan.VK10.*;
 public class HelloOpenXRVK {
 
     private static final String VK_LAYER_LUNARG_STANDARD_VALIDATION = "VK_LAYER_LUNARG_standard_validation";
+
+    private static final int VERTEX_SIZE = 2 * 3 * 4;
+    private static final int VERTEX_LOCATION_POSITION = 0;
+    private static final int VERTEX_LOCATION_COLOR = 1;
+    private static final int VERTEX_OFFSET_POSITION = 0;
+    private static final int VERTEX_OFFSET_COLOR = 1 * 3 * 4;
 
     private static class SwapchainWrapper {
 
@@ -53,6 +60,37 @@ public class HelloOpenXRVK {
         }
     }
 
+    private static ByteBuffer extractByteBuffer(String resourceName) {
+        try (
+            InputStream rawInput = HelloOpenXRVK.class.getClassLoader().getResourceAsStream(resourceName);
+            InputStream input = new BufferedInputStream(Objects.requireNonNull(rawInput))
+        ) {
+            List<Byte> byteList = new ArrayList<>(input.available());
+            int nextByte = input.read();
+            while (nextByte != -1) {
+                byteList.add((byte) nextByte);
+                nextByte = input.read();
+            }
+
+            ByteBuffer result = memCalloc(byteList.size());
+            for (int index = 0; index < byteList.size(); index++) {
+                result.put(index, byteList.get(index));
+            }
+            return result;
+        } catch (IOException shouldntHappen) {
+            throw new Error("Needed resources should always be available", shouldntHappen);
+        }
+    }
+
+    // TODO Arrange the byte code
+    private static ByteBuffer getVertexShaderBytes() {
+        return extractByteBuffer("demo/openxr/vulkan/hello.vert.spv");
+    }
+
+    private static ByteBuffer getFragmentShaderBytes() {
+        return extractByteBuffer("demo/openxr/vulkan/hello.frag.spv");
+    }
+
     public static void main(String[] args) {
         XR.create();
 
@@ -77,7 +115,7 @@ public class HelloOpenXRVK {
     private int vkQueueIndex;
     private long vkCommandPool;
     private long vkRenderPass;
-    private long vkGraphicsPipeline;
+    private long[] vkGraphicsPipelines;
 
     private SwapchainWrapper[] swapchains;
     private int viewConfiguration;
@@ -533,7 +571,7 @@ public class HelloOpenXRVK {
         createSwapchains();
         createCommandPools();
         createRenderPass();
-        createGraphicsPipeline();
+        createGraphicsPipelines();
         createRenderSpace();
     }
 
@@ -542,9 +580,6 @@ public class HelloOpenXRVK {
 
             XrReferenceSpaceCreateInfo ciReferenceSpace = XrReferenceSpaceCreateInfo.callocStack(stack);
             ciReferenceSpace.type(XR_TYPE_REFERENCE_SPACE_CREATE_INFO);
-            // TODO Using STAGE would be better, but it is not guaranteed to be supported.
-            //  This example doesn't need it, but applications that do need it could do some kind of calibration if
-            //  STATE is not supported.
             ciReferenceSpace.referenceSpaceType(XR_REFERENCE_SPACE_TYPE_LOCAL);
             ciReferenceSpace.poseInReferenceSpace(identityPose(stack));
 
@@ -558,6 +593,7 @@ public class HelloOpenXRVK {
         try (MemoryStack stack = stackPush()) {
 
             VkAttachmentDescription.Buffer attachments = VkAttachmentDescription.callocStack(1, stack);
+            // TODO Add depth/stencil attachment
             VkAttachmentDescription colorAttachment = attachments.get(0);
             colorAttachment.flags(0);
             colorAttachment.format(this.swapchainFormat);
@@ -595,7 +631,23 @@ public class HelloOpenXRVK {
         }
     }
 
-    private void createGraphicsPipeline() {
+    private void createGraphicsPipelines() {
+        this.vkGraphicsPipelines = new long[this.swapchains.length];
+
+        for (int swapchainIndex = 0; swapchainIndex < this.swapchains.length; swapchainIndex++) {
+            if (
+                swapchainIndex == 0 || this.swapchains[swapchainIndex - 1].width != this.swapchains[swapchainIndex].width
+                || this.swapchains[swapchainIndex - 1].height != this.swapchains[swapchainIndex].height
+            ) {
+                createGraphicsPipeline(swapchainIndex);
+            } else {
+                // If the swapchain has the same size as the previous swapchain (expected case), share the graphics pipeline
+                this.vkGraphicsPipelines[swapchainIndex] = this.vkGraphicsPipelines[swapchainIndex - 1];
+            }
+        }
+    }
+
+    private void createGraphicsPipeline(int swapchainIndex) {
         long vertexModule;
         long fragmentModule;
 
@@ -603,7 +655,8 @@ public class HelloOpenXRVK {
 
             VkShaderModuleCreateInfo ciVertexModule = VkShaderModuleCreateInfo.callocStack(stack);
             ciVertexModule.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
-            ciVertexModule.pCode(getVertexShaderBytes());
+            ByteBuffer vertexBytes = getVertexShaderBytes();
+            ciVertexModule.pCode(vertexBytes);
 
             LongBuffer pShaderModule = stack.callocLong(1);
             vkCheck(vkCreateShaderModule(vkDevice, ciVertexModule, null, pShaderModule), "CreateShaderModule (vertex)");
@@ -611,21 +664,17 @@ public class HelloOpenXRVK {
 
             VkShaderModuleCreateInfo ciFragmentModule = VkShaderModuleCreateInfo.callocStack(stack);
             ciFragmentModule.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
-            ciFragmentModule.pCode(getFragmentShaderBytes());
+            ByteBuffer fragmentBytes = getFragmentShaderBytes();
+            ciFragmentModule.pCode(fragmentBytes);
 
             vkCheck(vkCreateShaderModule(vkDevice, ciFragmentModule, null, pShaderModule), "CreateShaderModule (fragment)");
             fragmentModule = pShaderModule.get(0);
+
+            memFree(vertexBytes);
+            memFree(fragmentBytes);
         }
 
         try (MemoryStack stack = stackPush()) {
-
-            VkShaderModuleCreateInfo ciVertexModule = VkShaderModuleCreateInfo.callocStack(stack);
-            ciVertexModule.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
-            ciVertexModule.pCode(getVertexShaderBytes());
-
-            VkShaderModuleCreateInfo ciFragmentModule = VkShaderModuleCreateInfo.callocStack(stack);
-            ciFragmentModule.sType(VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO);
-            ciFragmentModule.pCode(getFragmentShaderBytes());
 
             VkPipelineShaderStageCreateInfo.Buffer ciPipelineShaderStages = VkPipelineShaderStageCreateInfo.callocStack(2, stack);
             VkPipelineShaderStageCreateInfo ciVertexStage = ciPipelineShaderStages.get(0);
@@ -633,17 +682,93 @@ public class HelloOpenXRVK {
             ciVertexStage.flags(0);
             ciVertexStage.stage(VK_SHADER_STAGE_VERTEX_BIT);
             ciVertexStage.module(vertexModule);
-            // TODO Look into this name
             ciVertexStage.pName(stack.UTF8("main"));
 
-            // TODO Add ciFragmentStage
             VkPipelineShaderStageCreateInfo ciFragmentStage = ciPipelineShaderStages.get(1);
             ciFragmentStage.sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
             ciFragmentStage.flags(0);
             ciFragmentStage.stage(VK_SHADER_STAGE_FRAGMENT_BIT);
             ciFragmentStage.module(fragmentModule);
-            // TODO Also look into this name
             ciFragmentStage.pName(stack.UTF8("main"));
+
+            VkVertexInputBindingDescription.Buffer vertexBindingDescriptions = VkVertexInputBindingDescription.callocStack(1, stack);
+            VkVertexInputBindingDescription vertexBindingDescription = vertexBindingDescriptions.get(0);
+            vertexBindingDescription.binding(0);
+            vertexBindingDescription.stride(VERTEX_SIZE);
+            vertexBindingDescription.inputRate(VK_VERTEX_INPUT_RATE_VERTEX);
+
+            VkVertexInputAttributeDescription.Buffer vertexAttributeDescriptions = VkVertexInputAttributeDescription.callocStack(2, stack);
+            VkVertexInputAttributeDescription attributePosition = vertexAttributeDescriptions.get(0);
+            attributePosition.location(VERTEX_LOCATION_POSITION);
+            attributePosition.binding(0);
+            attributePosition.format(VK_FORMAT_R32G32B32_SFLOAT);
+            attributePosition.offset(VERTEX_OFFSET_POSITION);
+
+            VkVertexInputAttributeDescription attributeColor = vertexAttributeDescriptions.get(1);
+            attributeColor.location(VERTEX_LOCATION_COLOR);
+            attributeColor.binding(0);
+            attributeColor.format(VK_FORMAT_R32G32B32_SFLOAT);
+            attributeColor.offset(VERTEX_OFFSET_COLOR);
+
+            VkPipelineVertexInputStateCreateInfo ciVertexInput = VkPipelineVertexInputStateCreateInfo.callocStack(stack);
+            ciVertexInput.sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            ciVertexInput.flags(0);
+            ciVertexInput.pVertexBindingDescriptions(vertexBindingDescriptions);
+            ciVertexInput.pVertexAttributeDescriptions(vertexAttributeDescriptions);
+
+            VkPipelineInputAssemblyStateCreateInfo ciInputAssembly = VkPipelineInputAssemblyStateCreateInfo.callocStack(stack);
+            ciInputAssembly.sType(VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO);
+            ciInputAssembly.flags(0);
+            ciInputAssembly.topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+            ciInputAssembly.primitiveRestartEnable(false);
+
+            VkPipelineRasterizationStateCreateInfo ciRasterizationState = VkPipelineRasterizationStateCreateInfo.callocStack(stack);
+            ciRasterizationState.sType(VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
+            ciRasterizationState.flags(0);
+            ciRasterizationState.depthClampEnable(false);
+            ciRasterizationState.rasterizerDiscardEnable(false);
+            ciRasterizationState.polygonMode(VK_POLYGON_MODE_FILL);
+            // In real applications, you would normally use culling. But, it is not so great for debugging.
+            // For instance, it could be the reason why you don't see anything if you messed up the winding order.
+            ciRasterizationState.cullMode(VK_CULL_MODE_NONE);
+            ciRasterizationState.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
+            ciRasterizationState.depthBiasEnable(false);
+
+            VkViewport.Buffer viewports = VkViewport.callocStack(1, stack);
+            VkViewport viewport = viewports.get(0);
+            viewport.x(0f);
+            viewport.y(0f);
+            viewport.width(this.swapchains[swapchainIndex].width);
+            viewport.height(this.swapchains[swapchainIndex].height);
+            viewport.minDepth(0f);
+            viewport.maxDepth(1f);
+
+            VkRect2D.Buffer scissors = VkRect2D.callocStack(1, stack);
+            VkRect2D scissor = scissors.get(0);
+            // By using callocStack, the offset will have a default value of 0, which is desired
+            scissor.offset(VkOffset2D.callocStack(stack));
+            scissor.extent(VkExtent2D.callocStack(stack).set(
+                this.swapchains[swapchainIndex].width,
+                this.swapchains[swapchainIndex].height
+            ));
+
+            VkPipelineViewportStateCreateInfo ciViewport = VkPipelineViewportStateCreateInfo.callocStack(stack);
+            ciViewport.sType(VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO);
+            ciViewport.flags(0);
+            ciViewport.pViewports(viewports);
+            ciViewport.pScissors(scissors);
+
+            VkPipelineMultisampleStateCreateInfo ciMultisample = VkPipelineMultisampleStateCreateInfo.callocStack(stack);
+            ciMultisample.sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
+            ciMultisample.flags(0);
+            // TODO Look into this
+            ciMultisample.rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
+            ciMultisample.sampleShadingEnable(false);
+            // I won't ignore a part of the samples
+            ciMultisample.pSampleMask(null);
+            // I won't use transparency in this example
+            ciMultisample.alphaToCoverageEnable(false);
+            ciMultisample.alphaToOneEnable(false);
 
             VkGraphicsPipelineCreateInfo.Buffer ciGraphicsPipelines = VkGraphicsPipelineCreateInfo.callocStack(1, stack);
 
@@ -653,11 +778,18 @@ public class HelloOpenXRVK {
             ciPipeline.flags(0);
             ciPipeline.renderPass(this.vkRenderPass);
             ciPipeline.pStages(ciPipelineShaderStages);
+            ciPipeline.pVertexInputState(ciVertexInput);
+            ciPipeline.pInputAssemblyState(ciInputAssembly);
+            // This example won't use a tessellation shader
+            ciPipeline.pTessellationState(null);
+            ciPipeline.pViewportState(ciViewport);
+            ciPipeline.pRasterizationState(ciRasterizationState);
+            ciPipeline.pMultisampleState(ciMultisample);
             // TODO The rest of the values
 
             LongBuffer pPipelines = stack.callocLong(1);
             vkCheck(vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, ciGraphicsPipelines, null, pPipelines), "CreateGraphicsPipelines");
-            this.vkGraphicsPipeline = pPipelines.get(0);
+            this.vkGraphicsPipelines[swapchainIndex] = pPipelines.get(0);
         }
     }
 
