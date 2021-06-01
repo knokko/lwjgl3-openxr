@@ -115,6 +115,7 @@ public class HelloOpenXRVK {
     private int vkQueueIndex;
     private long vkCommandPool;
     private long vkRenderPass;
+    private long vkPipelineLayout;
     private long[] vkGraphicsPipelines;
 
     private SwapchainWrapper[] swapchains;
@@ -592,8 +593,7 @@ public class HelloOpenXRVK {
     private void createRenderPass() {
         try (MemoryStack stack = stackPush()) {
 
-            VkAttachmentDescription.Buffer attachments = VkAttachmentDescription.callocStack(1, stack);
-            // TODO Add depth/stencil attachment
+            VkAttachmentDescription.Buffer attachments = VkAttachmentDescription.callocStack(2, stack);
             VkAttachmentDescription colorAttachment = attachments.get(0);
             colorAttachment.flags(0);
             colorAttachment.format(this.swapchainFormat);
@@ -606,10 +606,36 @@ public class HelloOpenXRVK {
             colorAttachment.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
             colorAttachment.finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
+            VkAttachmentDescription depthAttachment = attachments.get(1);
+            depthAttachment.flags(0);
+            depthAttachment.format(VK_FORMAT_D32_SFLOAT);
+            // TODO Not sure this even needs samples
+            depthAttachment.samples(VK_SAMPLE_COUNT_1_BIT);
+            depthAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
+            depthAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            depthAttachment.stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE);
+            depthAttachment.stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            depthAttachment.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+            depthAttachment.finalLayout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
             VkAttachmentReference.Buffer colorAttachmentRefs = VkAttachmentReference.callocStack(1, stack);
             VkAttachmentReference colorAttachmentRef = colorAttachmentRefs.get(0);
             colorAttachmentRef.attachment(0);
             colorAttachmentRef.layout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+            VkAttachmentReference depthAttachmentRef = VkAttachmentReference.callocStack(stack);
+            depthAttachmentRef.attachment(1);
+            depthAttachmentRef.layout(VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+            // Ensure that the render pass doesn't begin too early
+            VkSubpassDependency.Buffer dependencies = VkSubpassDependency.callocStack(1, stack);
+            VkSubpassDependency dependency = dependencies.get(0);
+            dependency.srcSubpass(VK_SUBPASS_EXTERNAL);
+            dependency.dstSubpass(0);
+            dependency.srcStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            dependency.srcAccessMask(0);
+            dependency.dstStageMask(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+            dependency.dstAccessMask(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
             VkSubpassDescription.Buffer subpasses = VkSubpassDescription.callocStack(1, stack);
             VkSubpassDescription subpass = subpasses.get(0);
@@ -618,12 +644,14 @@ public class HelloOpenXRVK {
             // For some reason, I have to specify the colorAttachmentCount explicitly
             subpass.colorAttachmentCount(1);
             subpass.pColorAttachments(colorAttachmentRefs);
+            subpass.pDepthStencilAttachment(depthAttachmentRef);
 
             VkRenderPassCreateInfo ciRenderPass = VkRenderPassCreateInfo.callocStack(stack);
             ciRenderPass.sType(VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO);
             ciRenderPass.flags(0);
             ciRenderPass.pAttachments(attachments);
             ciRenderPass.pSubpasses(subpasses);
+            ciRenderPass.pDependencies(dependencies);
 
             LongBuffer pRenderPass = stack.callocLong(1);
             vkCheck(vkCreateRenderPass(vkDevice, ciRenderPass, null, pRenderPass), "CreateRenderPass");
@@ -632,6 +660,10 @@ public class HelloOpenXRVK {
     }
 
     private void createGraphicsPipelines() {
+        try (MemoryStack stack = stackPush()) {
+            // TODO Create vkPipelineLayout
+        }
+
         this.vkGraphicsPipelines = new long[this.swapchains.length];
 
         for (int swapchainIndex = 0; swapchainIndex < this.swapchains.length; swapchainIndex++) {
@@ -770,6 +802,15 @@ public class HelloOpenXRVK {
             ciMultisample.alphaToCoverageEnable(false);
             ciMultisample.alphaToOneEnable(false);
 
+            VkPipelineDepthStencilStateCreateInfo ciDepthStencil = VkPipelineDepthStencilStateCreateInfo.callocStack(stack);
+            ciDepthStencil.sType(VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO);
+            ciDepthStencil.flags(0);
+            ciDepthStencil.depthTestEnable(true);
+            ciDepthStencil.depthWriteEnable(true);
+            ciDepthStencil.depthCompareOp(VK_COMPARE_OP_LESS);
+            ciDepthStencil.depthBoundsTestEnable(false);
+            ciDepthStencil.stencilTestEnable(false);
+
             VkGraphicsPipelineCreateInfo.Buffer ciGraphicsPipelines = VkGraphicsPipelineCreateInfo.callocStack(1, stack);
 
             // In this example, I will use only 1 graphics pipeline
@@ -785,6 +826,8 @@ public class HelloOpenXRVK {
             ciPipeline.pViewportState(ciViewport);
             ciPipeline.pRasterizationState(ciRasterizationState);
             ciPipeline.pMultisampleState(ciMultisample);
+            ciPipeline.pDepthStencilState(ciDepthStencil);
+
             // TODO The rest of the values
 
             LongBuffer pPipelines = stack.callocLong(1);
@@ -1231,6 +1274,8 @@ public class HelloOpenXRVK {
         if (this.vkRenderPass != 0) {
             vkDestroyRenderPass(vkDevice, vkRenderPass, null);
         }
+
+        // TODO Destroy pipeline layout and graphics pipeline itself (using vkDestroyPipeline and vkDestroyPipelineLayout)
     }
 
     private void destroyXrVkSession() {
