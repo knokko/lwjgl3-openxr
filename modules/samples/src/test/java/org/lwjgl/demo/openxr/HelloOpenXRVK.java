@@ -82,7 +82,6 @@ public class HelloOpenXRVK {
         }
     }
 
-    // TODO Arrange the byte code
     private static ByteBuffer getVertexShaderBytes() {
         return extractByteBuffer("demo/openxr/vulkan/hello.vert.spv");
     }
@@ -661,7 +660,16 @@ public class HelloOpenXRVK {
 
     private void createGraphicsPipelines() {
         try (MemoryStack stack = stackPush()) {
-            // TODO Create vkPipelineLayout
+            VkPipelineLayoutCreateInfo ciPipelineLayout = VkPipelineLayoutCreateInfo.callocStack(stack);
+            ciPipelineLayout.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
+            ciPipelineLayout.flags(0);
+            // I will add uniform variables or push constants later
+            ciPipelineLayout.pSetLayouts(null);
+            ciPipelineLayout.pPushConstantRanges(null);
+
+            LongBuffer pPipelineLayout = stack.callocLong(1);
+            vkCheck(vkCreatePipelineLayout(vkDevice, ciPipelineLayout, null, pPipelineLayout), "CreatePipelineLayout");
+            this.vkPipelineLayout = pPipelineLayout.get(0);
         }
 
         this.vkGraphicsPipelines = new long[this.swapchains.length];
@@ -811,6 +819,22 @@ public class HelloOpenXRVK {
             ciDepthStencil.depthBoundsTestEnable(false);
             ciDepthStencil.stencilTestEnable(false);
 
+            VkPipelineColorBlendAttachmentState.Buffer atsColorBlend = VkPipelineColorBlendAttachmentState.callocStack(1, stack);
+            // We only have 1 color attachment, so we only use 1 color blend attachment state
+            VkPipelineColorBlendAttachmentState atColorBlend = atsColorBlend.get(0);
+            // We won't be doing any fancy blending
+            atColorBlend.blendEnable(false);
+            atColorBlend.colorWriteMask(
+                VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+            );
+
+            VkPipelineColorBlendStateCreateInfo ciColorBlend = VkPipelineColorBlendStateCreateInfo.callocStack(stack);
+            ciColorBlend.sType(VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO);
+            ciColorBlend.flags(0);
+            ciColorBlend.logicOpEnable(false);
+            ciColorBlend.pAttachments(atsColorBlend);
+
             VkGraphicsPipelineCreateInfo.Buffer ciGraphicsPipelines = VkGraphicsPipelineCreateInfo.callocStack(1, stack);
 
             // In this example, I will use only 1 graphics pipeline
@@ -818,6 +842,7 @@ public class HelloOpenXRVK {
             ciPipeline.sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
             ciPipeline.flags(0);
             ciPipeline.renderPass(this.vkRenderPass);
+            ciPipeline.layout(this.vkPipelineLayout);
             ciPipeline.pStages(ciPipelineShaderStages);
             ciPipeline.pVertexInputState(ciVertexInput);
             ciPipeline.pInputAssemblyState(ciInputAssembly);
@@ -827,7 +852,7 @@ public class HelloOpenXRVK {
             ciPipeline.pRasterizationState(ciRasterizationState);
             ciPipeline.pMultisampleState(ciMultisample);
             ciPipeline.pDepthStencilState(ciDepthStencil);
-
+            ciPipeline.pColorBlendState(ciColorBlend);
             // TODO The rest of the values
 
             LongBuffer pPipelines = stack.callocLong(1);
@@ -1255,6 +1280,9 @@ public class HelloOpenXRVK {
     }
 
     private void destroyRenderResources() {
+
+        // TODO Ensure that all rendering is finished
+
         if (swapchains != null) {
             for (SwapchainWrapper swapchain : swapchains) {
                 if (swapchain != null) {
@@ -1275,7 +1303,17 @@ public class HelloOpenXRVK {
             vkDestroyRenderPass(vkDevice, vkRenderPass, null);
         }
 
-        // TODO Destroy pipeline layout and graphics pipeline itself (using vkDestroyPipeline and vkDestroyPipelineLayout)
+        if (vkPipelineLayout != 0) {
+            vkDestroyPipelineLayout(vkDevice, vkPipelineLayout, null);
+        }
+
+        if (vkGraphicsPipelines != null) {
+            for (long graphicsPipeline : vkGraphicsPipelines) {
+                if (graphicsPipeline != 0) {
+                    vkDestroyPipeline(vkDevice, graphicsPipeline, null);
+                }
+            }
+        }
     }
 
     private void destroyXrVkSession() {
