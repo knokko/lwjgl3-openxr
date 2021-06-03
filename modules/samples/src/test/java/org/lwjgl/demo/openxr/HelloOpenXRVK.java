@@ -672,25 +672,7 @@ public class HelloOpenXRVK {
             this.vkPipelineLayout = pPipelineLayout.get(0);
         }
 
-        this.vkGraphicsPipelines = new long[this.swapchains.length];
-
-        for (int swapchainIndex = 0; swapchainIndex < this.swapchains.length; swapchainIndex++) {
-            if (
-                swapchainIndex == 0 || this.swapchains[swapchainIndex - 1].width != this.swapchains[swapchainIndex].width
-                || this.swapchains[swapchainIndex - 1].height != this.swapchains[swapchainIndex].height
-            ) {
-                createGraphicsPipeline(swapchainIndex);
-            } else {
-                // If the swapchain has the same size as the previous swapchain (expected case), share the graphics pipeline
-                this.vkGraphicsPipelines[swapchainIndex] = this.vkGraphicsPipelines[swapchainIndex - 1];
-            }
-        }
-    }
-
-    private void createGraphicsPipeline(int swapchainIndex) {
-        long vertexModule;
-        long fragmentModule;
-
+        long vertexModule, fragmentModule;
         try (MemoryStack stack = stackPush()) {
 
             VkShaderModuleCreateInfo ciVertexModule = VkShaderModuleCreateInfo.callocStack(stack);
@@ -713,6 +695,26 @@ public class HelloOpenXRVK {
             memFree(vertexBytes);
             memFree(fragmentBytes);
         }
+
+        this.vkGraphicsPipelines = new long[this.swapchains.length];
+
+        for (int swapchainIndex = 0; swapchainIndex < this.swapchains.length; swapchainIndex++) {
+            if (
+                swapchainIndex == 0 || this.swapchains[swapchainIndex - 1].width != this.swapchains[swapchainIndex].width
+                || this.swapchains[swapchainIndex - 1].height != this.swapchains[swapchainIndex].height
+            ) {
+                createGraphicsPipeline(swapchainIndex, vertexModule, fragmentModule);
+            } else {
+                // If the swapchain has the same size as the previous swapchain (expected case), share the graphics pipeline
+                this.vkGraphicsPipelines[swapchainIndex] = this.vkGraphicsPipelines[swapchainIndex - 1];
+            }
+        }
+
+        vkDestroyShaderModule(vkDevice, vertexModule, null);
+        vkDestroyShaderModule(vkDevice, fragmentModule, null);
+    }
+
+    private void createGraphicsPipeline(int swapchainIndex, long vertexModule, long fragmentModule) {
 
         try (MemoryStack stack = stackPush()) {
 
@@ -751,7 +753,7 @@ public class HelloOpenXRVK {
             attributeColor.offset(VERTEX_OFFSET_COLOR);
 
             VkPipelineVertexInputStateCreateInfo ciVertexInput = VkPipelineVertexInputStateCreateInfo.callocStack(stack);
-            ciVertexInput.sType(VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO);
+            ciVertexInput.sType(VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO);
             ciVertexInput.flags(0);
             ciVertexInput.pVertexBindingDescriptions(vertexBindingDescriptions);
             ciVertexInput.pVertexAttributeDescriptions(vertexAttributeDescriptions);
@@ -768,6 +770,7 @@ public class HelloOpenXRVK {
             ciRasterizationState.depthClampEnable(false);
             ciRasterizationState.rasterizerDiscardEnable(false);
             ciRasterizationState.polygonMode(VK_POLYGON_MODE_FILL);
+            ciRasterizationState.lineWidth(1f);
             // In real applications, you would normally use culling. But, it is not so great for debugging.
             // For instance, it could be the reason why you don't see anything if you messed up the winding order.
             ciRasterizationState.cullMode(VK_CULL_MODE_NONE);
@@ -842,7 +845,10 @@ public class HelloOpenXRVK {
             ciPipeline.sType(VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO);
             ciPipeline.flags(0);
             ciPipeline.renderPass(this.vkRenderPass);
+            ciPipeline.subpass(0);
             ciPipeline.layout(this.vkPipelineLayout);
+            ciPipeline.basePipelineHandle(VK_NULL_HANDLE); // No pipeline derivatives in this example
+            ciPipeline.basePipelineIndex(-1);
             ciPipeline.pStages(ciPipelineShaderStages);
             ciPipeline.pVertexInputState(ciVertexInput);
             ciPipeline.pInputAssemblyState(ciInputAssembly);
@@ -853,7 +859,7 @@ public class HelloOpenXRVK {
             ciPipeline.pMultisampleState(ciMultisample);
             ciPipeline.pDepthStencilState(ciDepthStencil);
             ciPipeline.pColorBlendState(ciColorBlend);
-            // TODO The rest of the values
+            ciPipeline.pDynamicState(null); // No dynamic state will be needed
 
             LongBuffer pPipelines = stack.callocLong(1);
             vkCheck(vkCreateGraphicsPipelines(vkDevice, VK_NULL_HANDLE, ciGraphicsPipelines, null, pPipelines), "CreateGraphicsPipelines");
@@ -1308,8 +1314,9 @@ public class HelloOpenXRVK {
         }
 
         if (vkGraphicsPipelines != null) {
-            for (long graphicsPipeline : vkGraphicsPipelines) {
-                if (graphicsPipeline != 0) {
+            for (int pipelineIndex = 0; pipelineIndex < vkGraphicsPipelines.length; pipelineIndex++) {
+                long graphicsPipeline = vkGraphicsPipelines[pipelineIndex];
+                if (graphicsPipeline != 0 && (pipelineIndex == 0 || graphicsPipeline != vkGraphicsPipelines[pipelineIndex - 1])) {
                     vkDestroyPipeline(vkDevice, graphicsPipeline, null);
                 }
             }
