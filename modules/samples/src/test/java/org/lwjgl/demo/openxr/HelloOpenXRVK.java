@@ -40,8 +40,9 @@ public class HelloOpenXRVK {
         final XrSwapchain swapchain;
         final int width, height, numSamples;
         final long[] images;
+        final long[] framebuffers;
 
-        SwapchainWrapper(XrSwapchain swapchain, int width, int height, int numSamples, long[] images) {
+        SwapchainWrapper(XrSwapchain swapchain, int width, int height, int numSamples, long[] images, long[] framebuffers) {
             if (swapchain == null) throw new NullPointerException("swapchain");
             this.swapchain = swapchain;
             if (width <= 0) throw new IllegalArgumentException("width is " + width);
@@ -57,6 +58,16 @@ public class HelloOpenXRVK {
                 }
             }
             this.images = images;
+            if (framebuffers == null) throw new NullPointerException("framebuffers");
+            if (framebuffers.length != images.length) {
+                throw new IllegalArgumentException("#framebuffers is " + framebuffers.length + ", but #images is " + images.length);
+            }
+            for (long framebuffer : framebuffers) {
+                if (framebuffer == 0) {
+                    throw new IllegalArgumentException("A framebuffer is 0");
+                }
+            }
+            this.framebuffers = framebuffers;
         }
     }
 
@@ -568,9 +579,10 @@ public class HelloOpenXRVK {
     }
 
     private void createRenderResources() {
+        chooseSwapchainFormat();
+        createRenderPass();
         createSwapchains();
         createCommandPools();
-        createRenderPass();
         createGraphicsPipelines();
         createRenderSpace();
     }
@@ -883,9 +895,8 @@ public class HelloOpenXRVK {
         }
     }
 
-    private void createSwapchains() {
+    private void chooseSwapchainFormat() {
         try (MemoryStack stack = stackPush()) {
-
             IntBuffer pNumFormats = stack.callocInt(1);
             xrCheck(xrEnumerateSwapchainFormats(xrVkSession, pNumFormats, null), "EnumerateSwapchainFormats");
 
@@ -937,6 +948,11 @@ public class HelloOpenXRVK {
             }
 
             System.out.println("Chose swapchain format " + swapchainFormat);
+        }
+    }
+
+    private void createSwapchains() {
+        try (MemoryStack stack = stackPush()) {
 
             IntBuffer pNumViewConfigurations = stack.callocInt(1);
             xrEnumerateViewConfigurations(xrInstance, xrSystemId, pNumViewConfigurations, null);
@@ -1018,12 +1034,31 @@ public class HelloOpenXRVK {
                 long[] imagesArray = new long[numImages];
                 for (int imageIndex = 0; imageIndex < numImages; imageIndex++) {
                     imagesArray[imageIndex] = images.get(imageIndex).image();
+
+                    // TODO The image views
+                }
+
+                long[] framebufferArray = new long[numImages];
+                for (int frameIndex = 0; frameIndex < numImages; frameIndex++) {
+
+                    VkFramebufferCreateInfo ciFramebuffer = VkFramebufferCreateInfo.callocStack(stack);
+                    ciFramebuffer.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
+                    ciFramebuffer.flags(0);
+                    ciFramebuffer.renderPass(vkRenderPass);
+                    ciFramebuffer.pAttachments(attachments);
+                    ciFramebuffer.width(ciSwapchain.width());
+                    ciFramebuffer.height(ciSwapchain.height());
+                    ciFramebuffer.layers(1);
+
+                    LongBuffer pFramebuffer = stack.callocLong(1);
+                    vkCheck(vkCreateFramebuffer(vkDevice, ciFramebuffer, null, pFramebuffer), "CreateFramebuffer");
+                    framebufferArray[frameIndex] = pFramebuffer.get(0);
                 }
 
                 this.swapchains[swapchainIndex] = new SwapchainWrapper(
                     new XrSwapchain(pSwapchain.get(0), xrVkSession),
                     ciSwapchain.width(), ciSwapchain.height(), ciSwapchain.sampleCount(),
-                    imagesArray
+                    imagesArray, framebufferArray
                 );
             }
         }
@@ -1204,22 +1239,21 @@ public class HelloOpenXRVK {
                         }
 
                         for (int swapchainIndex = 0; swapchainIndex < swapchains.length; swapchainIndex++) {
-                            XrSwapchain swapchain = this.swapchains[swapchainIndex].swapchain;
+                            SwapchainWrapper swapchain = this.swapchains[swapchainIndex];
                             IntBuffer pImageIndex = stack.callocInt(1);
-                            int acquireResult = xrAcquireSwapchainImage(swapchain, null, pImageIndex);
+                            int acquireResult = xrAcquireSwapchainImage(swapchain.swapchain, null, pImageIndex);
                             if (acquireResult != XR_SESSION_LOSS_PENDING) {
                                 xrCheck(acquireResult, "AcquireSwapchainImage");
                             }
 
                             int imageIndex = pImageIndex.get(0);
-                            long swapchainImage = swapchains[swapchainIndex].images[imageIndex];
 
                             XrSwapchainImageWaitInfo wiSwapchainImage = XrSwapchainImageWaitInfo.callocStack(stack);
                             wiSwapchainImage.type(XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO);
                             // Time out after 1 second. If we would have to wait so long, something is seriously wrong
                             wiSwapchainImage.timeout(1_000_000_000);
 
-                            int waitImageResult = xrWaitSwapchainImage(swapchain, wiSwapchainImage);
+                            int waitImageResult = xrWaitSwapchainImage(swapchain.swapchain, wiSwapchainImage);
                             if (waitImageResult != XR_SESSION_LOSS_PENDING) {
                                 xrCheck(waitImageResult, "WaitSwapchainImage");
                             }
@@ -1241,7 +1275,34 @@ public class HelloOpenXRVK {
                             biCommandBuffer.flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
                             vkCheck(vkBeginCommandBuffer(commandBuffer, biCommandBuffer), "BeginCommandBuffer");
+
+                            VkClearColorValue clearColorValue = VkClearColorValue.callocStack(stack);
+                            clearColorValue.float32(0, 0.8f);
+                            clearColorValue.float32(1, 0.2f);
+                            clearColorValue.float32(2, 0.7f);
+                            clearColorValue.float32(3, 1f);
+
+                            VkClearDepthStencilValue clearDepthValue = VkClearDepthStencilValue.callocStack(stack);
+                            clearDepthValue.depth(1f);
+
+                            VkClearValue.Buffer clearValues = VkClearValue.callocStack(2, stack);
+                            clearValues.get(0).color(clearColorValue);
+                            clearValues.get(1).depthStencil(clearDepthValue);
+
                             // TODO Record render commands
+                            VkRenderPassBeginInfo biRenderPass = VkRenderPassBeginInfo.callocStack(stack);
+                            biRenderPass.sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
+                            biRenderPass.pNext(VK_NULL_HANDLE);
+                            biRenderPass.renderPass(vkRenderPass);
+                            biRenderPass.framebuffer(swapchain.framebuffers[imageIndex]);
+                            biRenderPass.renderArea(VkRect2D.callocStack(stack).set(
+                                VkOffset2D.callocStack(stack).set(0, 0),
+                                VkExtent2D.callocStack(stack).set(swapchain.width, swapchain.height)
+                            ));
+                            biRenderPass.pClearValues(clearValues);
+
+                            vkCmdBeginRenderPass(commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
+
                             vkCheck(vkEndCommandBuffer(commandBuffer), "EndCommandBuffer");
 
                             VkSubmitInfo submitInfo = VkSubmitInfo.callocStack(stack);
@@ -1261,7 +1322,7 @@ public class HelloOpenXRVK {
                             vkFreeCommandBuffers(vkDevice, this.vkCommandPool, commandBuffer);
                             vkDestroyFence(vkDevice, fence, null);
 
-                            int releaseResult = xrReleaseSwapchainImage(swapchain, null);
+                            int releaseResult = xrReleaseSwapchainImage(swapchain.swapchain, null);
                             if (releaseResult != XR_SESSION_LOSS_PENDING) {
                                 xrCheck(releaseResult, "ReleaseSwapchainImage");
                             }
