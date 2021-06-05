@@ -35,39 +35,58 @@ public class HelloOpenXRVK {
     private static final int VERTEX_OFFSET_POSITION = 0;
     private static final int VERTEX_OFFSET_COLOR = 1 * 3 * 4;
 
+    private static final int DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
+
+    private static class SwapchainImage {
+        final long colorImage;
+        final long colorImageView;
+        final long framebuffer;
+
+        SwapchainImage(long colorImage, long colorImageView, long framebuffer) {
+            this.colorImage = colorImage;
+            this.colorImageView = colorImageView;
+            this.framebuffer = framebuffer;
+        }
+    }
+
     private static class SwapchainWrapper {
 
         final XrSwapchain swapchain;
         final int width, height, numSamples;
-        final long[] images;
-        final long[] framebuffers;
+        final long depthImage;
+        final long depthImageView;
+        final SwapchainImage[] images;
 
-        SwapchainWrapper(XrSwapchain swapchain, int width, int height, int numSamples, long[] images, long[] framebuffers) {
+        SwapchainWrapper(
+            XrSwapchain swapchain, int width, int height, int numSamples,
+            long depthImage, long depthImageView, SwapchainImage[] images
+        ) {
             if (swapchain == null) throw new NullPointerException("swapchain");
             this.swapchain = swapchain;
             if (width <= 0) throw new IllegalArgumentException("width is " + width);
             this.width = width;
             if (height <= 0) throw new IllegalArgumentException("height is " + height);
             this.height = height;
-            if (images == null) throw new IllegalArgumentException("images are null");
+
             if (numSamples <= 0) throw new IllegalArgumentException("numSamples is " + numSamples);
+
+            if (images == null) throw new IllegalArgumentException("images are null");
             this.numSamples = numSamples;
-            for (long image : images) {
-                if (image == 0) {
-                    throw new IllegalArgumentException("An image is 0");
+            for (SwapchainImage image : images) {
+                if (image == null) {
+                    throw new IllegalArgumentException("An image is null");
                 }
+
+                if (image.colorImage == 0) throw new IllegalArgumentException("A color image is 0");
+                if (image.colorImageView == 0) throw new IllegalArgumentException("A color image view is 0");
+                if (image.framebuffer == 0) throw new IllegalArgumentException("A framebuffer is 0");
             }
             this.images = images;
-            if (framebuffers == null) throw new NullPointerException("framebuffers");
-            if (framebuffers.length != images.length) {
-                throw new IllegalArgumentException("#framebuffers is " + framebuffers.length + ", but #images is " + images.length);
-            }
-            for (long framebuffer : framebuffers) {
-                if (framebuffer == 0) {
-                    throw new IllegalArgumentException("A framebuffer is 0");
-                }
-            }
-            this.framebuffers = framebuffers;
+
+            if (depthImage == 0) throw new IllegalArgumentException("The depth image is 0");
+            this.depthImage = depthImage;
+            if (depthImageView == 0) throw new IllegalArgumentException("The depth image view is 0");
+            this.depthImageView = depthImageView;
         }
     }
 
@@ -608,7 +627,7 @@ public class HelloOpenXRVK {
             VkAttachmentDescription colorAttachment = attachments.get(0);
             colorAttachment.flags(0);
             colorAttachment.format(this.swapchainFormat);
-            // TODO Take a closer look at this...
+            // TODO SAMPLES
             colorAttachment.samples(VK_SAMPLE_COUNT_1_BIT);
             colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
             colorAttachment.storeOp(VK_ATTACHMENT_STORE_OP_STORE);
@@ -619,8 +638,8 @@ public class HelloOpenXRVK {
 
             VkAttachmentDescription depthAttachment = attachments.get(1);
             depthAttachment.flags(0);
-            depthAttachment.format(VK_FORMAT_D32_SFLOAT);
-            // TODO Not sure this even needs samples
+            depthAttachment.format(DEPTH_FORMAT);
+            // TODO SAMPLES
             depthAttachment.samples(VK_SAMPLE_COUNT_1_BIT);
             depthAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
             depthAttachment.storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
@@ -816,7 +835,7 @@ public class HelloOpenXRVK {
             VkPipelineMultisampleStateCreateInfo ciMultisample = VkPipelineMultisampleStateCreateInfo.callocStack(stack);
             ciMultisample.sType(VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO);
             ciMultisample.flags(0);
-            // TODO Look into this
+            // TODO SAMPLES
             ciMultisample.rasterizationSamples(VK_SAMPLE_COUNT_1_BIT);
             ciMultisample.sampleShadingEnable(false);
             // I won't ignore a part of the samples
@@ -1022,43 +1041,109 @@ public class HelloOpenXRVK {
 
                 int numImages = pNumImages.get(0);
                 System.out.println("Swapchain " + swapchainIndex + " has " + numImages + " images");
-                XrSwapchainImageVulkanKHR.Buffer images = XrSwapchainImageVulkanKHR.callocStack(numImages, stack);
+                XrSwapchainImageVulkanKHR.Buffer swapchainColorImages = XrSwapchainImageVulkanKHR.callocStack(numImages, stack);
                 for (int imageIndex = 0; imageIndex < numImages; imageIndex++) {
-                    images.get(imageIndex).type(XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR);
+                    swapchainColorImages.get(imageIndex).type(XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR);
                 }
                 xrCheck(xrEnumerateSwapchainImages(
                     swapchain, pNumImages,
-                    XrSwapchainImageBaseHeader.create(images.address(), images.capacity())
+                    XrSwapchainImageBaseHeader.create(swapchainColorImages.address(), swapchainColorImages.capacity())
                 ), "EnumerateSwapchainImages");
 
-                long[] imagesArray = new long[numImages];
+                VkImageCreateInfo ciDepthImage = VkImageCreateInfo.callocStack(stack);
+                ciDepthImage.sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
+                ciDepthImage.flags(0);
+                ciDepthImage.imageType(VK_IMAGE_TYPE_2D);
+                ciDepthImage.format(DEPTH_FORMAT);
+                ciDepthImage.extent().width(ciSwapchain.width());
+                ciDepthImage.extent().height(ciSwapchain.height());
+                ciDepthImage.extent().depth(1);
+                ciDepthImage.mipLevels(1);
+                ciDepthImage.arrayLayers(1);
+                // TODO SAMPLES
+                ciDepthImage.samples(VK_SAMPLE_COUNT_1_BIT);
+                ciDepthImage.tiling(VK_IMAGE_TILING_OPTIMAL);
+                ciDepthImage.usage(VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+                ciDepthImage.sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+                ciDepthImage.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
+
+                LongBuffer pDepthImage = stack.callocLong(1);
+                vkCheck(vkCreateImage(vkDevice, ciDepthImage, null, pDepthImage), "CreateImage");
+                long depthImage = pDepthImage.get(0);
+
+                SwapchainImage[] swapchainImages = new SwapchainImage[numImages];
+
+                VkComponentMapping componentMapping = VkComponentMapping.callocStack(stack);
+                componentMapping.r(VK_COMPONENT_SWIZZLE_IDENTITY);
+                componentMapping.g(VK_COMPONENT_SWIZZLE_IDENTITY);
+                componentMapping.b(VK_COMPONENT_SWIZZLE_IDENTITY);
+                componentMapping.a(VK_COMPONENT_SWIZZLE_IDENTITY);
+
+                VkImageSubresourceRange colorSubresourceRange = VkImageSubresourceRange.callocStack(stack);
+                colorSubresourceRange.aspectMask(VK_IMAGE_ASPECT_COLOR_BIT);
+                colorSubresourceRange.baseMipLevel(0);
+                colorSubresourceRange.levelCount(1);
+                colorSubresourceRange.baseArrayLayer(0);
+                colorSubresourceRange.layerCount(1);
+
+                VkImageSubresourceRange depthSubresourceRange = VkImageSubresourceRange.callocStack(stack);
+                colorSubresourceRange.aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT);
+                colorSubresourceRange.baseMipLevel(0);
+                colorSubresourceRange.levelCount(1);
+                colorSubresourceRange.baseArrayLayer(0);
+                colorSubresourceRange.layerCount(1);
+
+                VkImageViewCreateInfo ciDepthImageView = VkImageViewCreateInfo.callocStack(stack);
+                ciDepthImageView.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+                ciDepthImageView.flags(0);
+                ciDepthImageView.image(depthImage);
+                ciDepthImageView.viewType(VK_IMAGE_VIEW_TYPE_2D);
+                ciDepthImageView.format(DEPTH_FORMAT);
+                ciDepthImageView.components(componentMapping);
+                ciDepthImageView.subresourceRange(depthSubresourceRange);
+
+                LongBuffer pDepthImageView = stack.callocLong(1);
+                // TODO Create memory for the depth image
+                vkCheck(vkCreateImageView(vkDevice, ciDepthImageView, null, pDepthImageView), "CreateImageView");
+                long depthImageView = pDepthImageView.get(0);
+
                 for (int imageIndex = 0; imageIndex < numImages; imageIndex++) {
-                    imagesArray[imageIndex] = images.get(imageIndex).image();
 
-                    // TODO The image views
-                }
+                    long colorImage = swapchainColorImages.get(imageIndex).image();
 
-                long[] framebufferArray = new long[numImages];
-                for (int frameIndex = 0; frameIndex < numImages; frameIndex++) {
+                    VkImageViewCreateInfo ciImageView = VkImageViewCreateInfo.callocStack(stack);
+                    ciImageView.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
+                    ciImageView.flags(0);
+                    ciImageView.image(colorImage);
+                    ciImageView.viewType(VK_IMAGE_VIEW_TYPE_2D);
+                    ciImageView.format(swapchainFormat);
+                    ciImageView.components(componentMapping);
+                    ciImageView.subresourceRange(colorSubresourceRange);
+
+                    LongBuffer pImageView = stack.callocLong(1);
+                    vkCheck(vkCreateImageView(vkDevice, ciImageView, null, pImageView), "CreateImageView");
+                    long colorImageView = pImageView.get(0);
 
                     VkFramebufferCreateInfo ciFramebuffer = VkFramebufferCreateInfo.callocStack(stack);
                     ciFramebuffer.sType(VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO);
                     ciFramebuffer.flags(0);
                     ciFramebuffer.renderPass(vkRenderPass);
-                    ciFramebuffer.pAttachments(attachments);
+                    ciFramebuffer.pAttachments(stack.longs(colorImageView, depthImageView));
                     ciFramebuffer.width(ciSwapchain.width());
                     ciFramebuffer.height(ciSwapchain.height());
                     ciFramebuffer.layers(1);
 
                     LongBuffer pFramebuffer = stack.callocLong(1);
                     vkCheck(vkCreateFramebuffer(vkDevice, ciFramebuffer, null, pFramebuffer), "CreateFramebuffer");
-                    framebufferArray[frameIndex] = pFramebuffer.get(0);
+                    long framebuffer = pFramebuffer.get(0);
+
+                    swapchainImages[imageIndex] = new SwapchainImage(colorImage, colorImageView, framebuffer);
                 }
 
                 this.swapchains[swapchainIndex] = new SwapchainWrapper(
                     new XrSwapchain(pSwapchain.get(0), xrVkSession),
                     ciSwapchain.width(), ciSwapchain.height(), ciSwapchain.sampleCount(),
-                    imagesArray, framebufferArray
+                    depthImage, depthImageView, swapchainImages
                 );
             }
         }
@@ -1289,12 +1374,11 @@ public class HelloOpenXRVK {
                             clearValues.get(0).color(clearColorValue);
                             clearValues.get(1).depthStencil(clearDepthValue);
 
-                            // TODO Record render commands
                             VkRenderPassBeginInfo biRenderPass = VkRenderPassBeginInfo.callocStack(stack);
                             biRenderPass.sType(VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO);
                             biRenderPass.pNext(VK_NULL_HANDLE);
                             biRenderPass.renderPass(vkRenderPass);
-                            biRenderPass.framebuffer(swapchain.framebuffers[imageIndex]);
+                            biRenderPass.framebuffer(swapchain.images[imageIndex].framebuffer);
                             biRenderPass.renderArea(VkRect2D.callocStack(stack).set(
                                 VkOffset2D.callocStack(stack).set(0, 0),
                                 VkExtent2D.callocStack(stack).set(swapchain.width, swapchain.height)
@@ -1302,6 +1386,8 @@ public class HelloOpenXRVK {
                             biRenderPass.pClearValues(clearValues);
 
                             vkCmdBeginRenderPass(commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
+                            // TODO Do something during the render (sub)pass
+                            vkCmdEndRenderPass(commandBuffer);
 
                             vkCheck(vkEndCommandBuffer(commandBuffer), "EndCommandBuffer");
 
@@ -1354,6 +1440,15 @@ public class HelloOpenXRVK {
             for (SwapchainWrapper swapchain : swapchains) {
                 if (swapchain != null) {
                     xrDestroySwapchain(swapchain.swapchain);
+
+                    for (SwapchainImage swapchainImage : swapchain.images) {
+                        vkDestroyFramebuffer(vkDevice, swapchainImage.framebuffer, null);
+                        vkDestroyImageView(vkDevice, swapchainImage.colorImageView, null);
+                        vkDestroyImage(vkDevice, swapchainImage.colorImage, null);
+                    }
+
+                    vkDestroyImageView(vkDevice, swapchain.depthImageView, null);
+                    vkDestroyImage(vkDevice, swapchain.depthImage, null);
                 }
             }
         }
