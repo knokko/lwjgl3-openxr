@@ -55,11 +55,12 @@ public class HelloOpenXRVK {
         final int width, height, numSamples;
         final long depthImage;
         final long depthImageView;
+        final long depthImageMemory;
         final SwapchainImage[] images;
 
         SwapchainWrapper(
             XrSwapchain swapchain, int width, int height, int numSamples,
-            long depthImage, long depthImageView, SwapchainImage[] images
+            long depthImage, long depthImageView, long depthImageMemory, SwapchainImage[] images
         ) {
             if (swapchain == null) throw new NullPointerException("swapchain");
             this.swapchain = swapchain;
@@ -87,6 +88,8 @@ public class HelloOpenXRVK {
             this.depthImage = depthImage;
             if (depthImageView == 0) throw new IllegalArgumentException("The depth image view is 0");
             this.depthImageView = depthImageView;
+            if (depthImageMemory == 0) throw new IllegalArgumentException("The depth image memory is 0");
+            this.depthImageMemory = depthImageMemory;
         }
     }
 
@@ -634,7 +637,7 @@ public class HelloOpenXRVK {
             colorAttachment.stencilLoadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE);
             colorAttachment.stencilStoreOp(VK_ATTACHMENT_STORE_OP_DONT_CARE);
             colorAttachment.initialLayout(VK_IMAGE_LAYOUT_UNDEFINED);
-            colorAttachment.finalLayout(VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+            colorAttachment.finalLayout(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
             VkAttachmentDescription depthAttachment = attachments.get(1);
             depthAttachment.flags(0);
@@ -1087,11 +1090,11 @@ public class HelloOpenXRVK {
                 colorSubresourceRange.layerCount(1);
 
                 VkImageSubresourceRange depthSubresourceRange = VkImageSubresourceRange.callocStack(stack);
-                colorSubresourceRange.aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT);
-                colorSubresourceRange.baseMipLevel(0);
-                colorSubresourceRange.levelCount(1);
-                colorSubresourceRange.baseArrayLayer(0);
-                colorSubresourceRange.layerCount(1);
+                depthSubresourceRange.aspectMask(VK_IMAGE_ASPECT_DEPTH_BIT);
+                depthSubresourceRange.baseMipLevel(0);
+                depthSubresourceRange.levelCount(1);
+                depthSubresourceRange.baseArrayLayer(0);
+                depthSubresourceRange.layerCount(1);
 
                 VkImageViewCreateInfo ciDepthImageView = VkImageViewCreateInfo.callocStack(stack);
                 ciDepthImageView.sType(VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO);
@@ -1102,8 +1105,37 @@ public class HelloOpenXRVK {
                 ciDepthImageView.components(componentMapping);
                 ciDepthImageView.subresourceRange(depthSubresourceRange);
 
+                VkMemoryRequirements pMemoryRequirements = VkMemoryRequirements.callocStack(stack);
+                vkGetImageMemoryRequirements(vkDevice, depthImage, pMemoryRequirements);
+
+                VkPhysicalDeviceMemoryProperties pMemoryProperties = VkPhysicalDeviceMemoryProperties.callocStack(stack);
+                vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, pMemoryProperties);
+
+                int memoryTypeIndex = 0;
+                for (; memoryTypeIndex < pMemoryProperties.memoryTypeCount(); memoryTypeIndex++) {
+                    boolean allowedByImage = (pMemoryRequirements.memoryTypeBits() & (1 << memoryTypeIndex)) != 0;
+                    boolean hasNeededProperties = (pMemoryProperties.memoryTypes(memoryTypeIndex).propertyFlags() & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+                    if (allowedByImage && hasNeededProperties) {
+                        break;
+                    }
+                }
+
+                if (memoryTypeIndex >= pMemoryProperties.memoryTypeCount()) {
+                    throw new IllegalArgumentException("Failed to find suitable memory type for depth image");
+                }
+
+                VkMemoryAllocateInfo aiDepthMemory = VkMemoryAllocateInfo.callocStack(stack);
+                aiDepthMemory.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+                aiDepthMemory.allocationSize(pMemoryRequirements.size());
+                aiDepthMemory.memoryTypeIndex(memoryTypeIndex);
+
+                LongBuffer pDepthMemory = stack.callocLong(1);
+                vkCheck(vkAllocateMemory(vkDevice, aiDepthMemory, null, pDepthMemory), "AllocateMemory");
+                long depthImageMemory = pDepthMemory.get(0);
+
+                vkCheck(vkBindImageMemory(vkDevice, depthImage, depthImageMemory, 0), "BindImageMemory");
+
                 LongBuffer pDepthImageView = stack.callocLong(1);
-                // TODO Create memory for the depth image
                 vkCheck(vkCreateImageView(vkDevice, ciDepthImageView, null, pDepthImageView), "CreateImageView");
                 long depthImageView = pDepthImageView.get(0);
 
@@ -1143,7 +1175,7 @@ public class HelloOpenXRVK {
                 this.swapchains[swapchainIndex] = new SwapchainWrapper(
                     new XrSwapchain(pSwapchain.get(0), xrVkSession),
                     ciSwapchain.width(), ciSwapchain.height(), ciSwapchain.sampleCount(),
-                    depthImage, depthImageView, swapchainImages
+                    depthImage, depthImageView, depthImageMemory, swapchainImages
                 );
             }
         }
@@ -1444,11 +1476,12 @@ public class HelloOpenXRVK {
                     for (SwapchainImage swapchainImage : swapchain.images) {
                         vkDestroyFramebuffer(vkDevice, swapchainImage.framebuffer, null);
                         vkDestroyImageView(vkDevice, swapchainImage.colorImageView, null);
-                        vkDestroyImage(vkDevice, swapchainImage.colorImage, null);
+                        // No need to destroy the colorImage because that happens implicitly upon destroying swapchain
                     }
 
                     vkDestroyImageView(vkDevice, swapchain.depthImageView, null);
                     vkDestroyImage(vkDevice, swapchain.depthImage, null);
+                    vkFreeMemory(vkDevice, swapchain.depthImageMemory, null);
                 }
             }
         }
