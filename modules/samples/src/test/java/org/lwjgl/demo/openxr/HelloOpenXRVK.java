@@ -22,7 +22,6 @@ import static org.lwjgl.openxr.XR10.*;
 import static org.lwjgl.system.MemoryStack.*;
 import static org.lwjgl.system.MemoryUtil.*;
 import static org.lwjgl.vulkan.EXTDebugUtils.*;
-import static org.lwjgl.vulkan.KHRSwapchain.*;
 import static org.lwjgl.vulkan.VK10.*;
 
 public class HelloOpenXRVK {
@@ -34,6 +33,17 @@ public class HelloOpenXRVK {
     private static final int VERTEX_LOCATION_COLOR = 1;
     private static final int VERTEX_OFFSET_POSITION = 0;
     private static final int VERTEX_OFFSET_COLOR = 1 * 3 * 4;
+
+    private static final int INDEX_SIZE = 2;
+    private static final int INDEX_TYPE = VK_INDEX_TYPE_UINT16;
+
+    private static class BigModel {
+
+        static final int NUM_CUBES = 500;
+
+        static final int NUM_VERTICES = NUM_CUBES * 6 * 4;
+        static final int NUM_INDICES = NUM_CUBES * 6 * 6;
+    }
 
     private static final int DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
 
@@ -607,6 +617,111 @@ public class HelloOpenXRVK {
         createCommandPools();
         createGraphicsPipelines();
         createRenderSpace();
+        createBuffers();
+    }
+
+    private int chooseMemoryTypeIndex(VkMemoryRequirements requirements, int requiredPropertyBits, MemoryStack stack) {
+
+        VkPhysicalDeviceMemoryProperties memoryProps = VkPhysicalDeviceMemoryProperties.callocStack(stack);
+        vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, memoryProps);
+
+        for (int memoryTypeIndex = 0; memoryTypeIndex < memoryProps.memoryTypeCount(); memoryTypeIndex++) {
+
+            boolean allowedByResource = (requirements.memoryTypeBits() & (1 << memoryTypeIndex)) != 0;
+            boolean hasNeededProperties = (memoryProps.memoryTypes(memoryTypeIndex).propertyFlags() & requiredPropertyBits) == requiredPropertyBits;
+
+            if (allowedByResource && hasNeededProperties) {
+                return memoryTypeIndex;
+            }
+        }
+
+        throw new IllegalArgumentException("Failed to find suitable memory type for resource");
+    }
+
+    private void createBuffers() {
+        try (MemoryStack stack = stackPush()) {
+
+            int bigVertexSize = BigModel.NUM_VERTICES * VERTEX_SIZE;
+            int bigIndexSize = BigModel.NUM_INDICES * INDEX_SIZE;
+            long bigSharedBuffer = createBuffer(bigVertexSize + bigIndexSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+
+            VkMemoryRequirements sharedMemRequirements = VkMemoryRequirements.callocStack(stack);
+            vkGetBufferMemoryRequirements(vkDevice, bigSharedBuffer, sharedMemRequirements);
+
+            VkMemoryAllocateInfo aiSharedMemory = VkMemoryAllocateInfo.callocStack(stack);
+            aiSharedMemory.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+            aiSharedMemory.allocationSize(sharedMemRequirements.size());
+            aiSharedMemory.memoryTypeIndex(chooseMemoryTypeIndex(sharedMemRequirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, stack));
+
+            LongBuffer pSharedMemory = stack.callocLong(1);
+            vkCheck(vkAllocateMemory(vkDevice, aiSharedMemory, null, pSharedMemory), "AllocateMemory");
+            long sharedMemory = pSharedMemory.get(0);
+
+            PointerBuffer ppSharedData = stack.callocPointer(1);
+            vkCheck(vkMapMemory(vkDevice, sharedMemory, 0, VK_WHOLE_SIZE, 0, ppSharedData), "MapMemory");
+
+            ByteBuffer sharedData = memByteBuffer(ppSharedData.get(0), bigVertexSize + bigIndexSize);
+            sharedData.position(0);
+            sharedData.limit(bigVertexSize);
+            putVertexData(sharedData);
+            sharedData.position(bigVertexSize);
+            sharedData.limit(bigVertexSize + bigIndexSize);
+            putIndexData(sharedData);
+
+            VkMappedMemoryRange sharedMemoryRange = VkMappedMemoryRange.callocStack(stack);
+            sharedMemoryRange.sType(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
+            sharedMemoryRange.memory(sharedMemory);
+            sharedMemoryRange.offset(0);
+            sharedMemoryRange.size(sharedData.capacity());
+
+            vkCheck(vkFlushMappedMemoryRanges(vkDevice, sharedMemoryRange), "FlushMappedMemoryRanges");
+            vkUnmapMemory(vkDevice, sharedMemory);
+            vkCheck(vkBindBufferMemory(vkDevice, bigSharedBuffer, sharedMemory, 0), "BindBufferMemory");
+
+            long deviceBuffer = createBuffer(
+                bigVertexSize + bigIndexSize,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+            );
+
+            VkMemoryRequirements deviceMemRequirements = VkMemoryRequirements.callocStack(stack);
+            vkGetBufferMemoryRequirements(vkDevice, deviceBuffer, deviceMemRequirements);;
+
+            VkMemoryAllocateInfo aiDeviceMemory = VkMemoryAllocateInfo.callocStack(stack);
+            aiDeviceMemory.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
+            aiDeviceMemory.allocationSize(deviceMemRequirements.size());
+            aiDeviceMemory.memoryTypeIndex(chooseMemoryTypeIndex(deviceMemRequirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stack));
+
+            LongBuffer pDeviceMemory = stack.callocLong(1);
+            vkCheck(vkAllocateMemory(vkDevice, aiSharedMemory, null, pDeviceMemory), "AllocateMemory");
+            long deviceMemory = pDeviceMemory.get(0);
+
+            vkCheck(vkBindBufferMemory(vkDevice, deviceBuffer, deviceMemory, 0), "BindBufferMemory");
+
+            VkCommandBufferAllocateInfo aiCommandBuffer = VkCommandBufferAllocateInfo.callocStack(stack);
+            // TODO Fill in
+
+            PointerBuffer pCommandBuffer = stack.callocPointer(1);
+            vkCheck(vkAllocateCommandBuffers(vkDevice, aiCommandBuffer, pCommandBuffer), "AllocateCommandBuffers");
+            VkCommandBuffer copyCommandBuffer = new VkCommandBuffer(pCommandBuffer.get(0), vkDevice);
+            
+            // TODO Copy the shared buffer to the device buffer and destroy the shared buffer (and its memory)
+        }
+    }
+
+    private long createBuffer(long size, int usage) {
+
+        try (MemoryStack stack = stackPush()) {
+            VkBufferCreateInfo ciBuffer = VkBufferCreateInfo.callocStack(stack);
+            ciBuffer.sType(VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO);
+            ciBuffer.flags(0);
+            ciBuffer.size(size);
+            ciBuffer.usage(usage);
+            ciBuffer.sharingMode(VK_SHARING_MODE_EXCLUSIVE);
+
+            LongBuffer pBuffer = stack.callocLong(1);
+            vkCreateBuffer(vkDevice, ciBuffer, null, pBuffer);
+            return pBuffer.get(0);
+        }
     }
 
     private void createRenderSpace() {
@@ -1108,21 +1223,7 @@ public class HelloOpenXRVK {
                 VkMemoryRequirements pMemoryRequirements = VkMemoryRequirements.callocStack(stack);
                 vkGetImageMemoryRequirements(vkDevice, depthImage, pMemoryRequirements);
 
-                VkPhysicalDeviceMemoryProperties pMemoryProperties = VkPhysicalDeviceMemoryProperties.callocStack(stack);
-                vkGetPhysicalDeviceMemoryProperties(vkPhysicalDevice, pMemoryProperties);
-
-                int memoryTypeIndex = 0;
-                for (; memoryTypeIndex < pMemoryProperties.memoryTypeCount(); memoryTypeIndex++) {
-                    boolean allowedByImage = (pMemoryRequirements.memoryTypeBits() & (1 << memoryTypeIndex)) != 0;
-                    boolean hasNeededProperties = (pMemoryProperties.memoryTypes(memoryTypeIndex).propertyFlags() & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
-                    if (allowedByImage && hasNeededProperties) {
-                        break;
-                    }
-                }
-
-                if (memoryTypeIndex >= pMemoryProperties.memoryTypeCount()) {
-                    throw new IllegalArgumentException("Failed to find suitable memory type for depth image");
-                }
+                int memoryTypeIndex = chooseMemoryTypeIndex(pMemoryRequirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stack);
 
                 VkMemoryAllocateInfo aiDepthMemory = VkMemoryAllocateInfo.callocStack(stack);
                 aiDepthMemory.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
@@ -1418,7 +1519,10 @@ public class HelloOpenXRVK {
                             biRenderPass.pClearValues(clearValues);
 
                             vkCmdBeginRenderPass(commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
-                            // TODO Do something during the render (sub)pass
+                            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkGraphicsPipelines[swapchainIndex]);
+                            vkCmdBindVertexBuffers(commandBuffer, firstVertexBinding, vertexBuffers, vertexOffsets);
+                            vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, INDEX_TYPE);
+                            vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
                             vkCmdEndRenderPass(commandBuffer);
 
                             vkCheck(vkEndCommandBuffer(commandBuffer), "EndCommandBuffer");
@@ -1510,6 +1614,9 @@ public class HelloOpenXRVK {
                 }
             }
         }
+
+        // TODO Destroy vertex buffers
+        // TODO Destroy index buffers
     }
 
     private void destroyXrVkSession() {
