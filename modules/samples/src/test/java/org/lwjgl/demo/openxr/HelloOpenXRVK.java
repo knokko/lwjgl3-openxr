@@ -12,6 +12,7 @@ import org.lwjgl.vulkan.*;
 import java.io.*;
 import java.lang.reflect.*;
 import java.nio.*;
+import java.nio.file.*;
 import java.util.*;
 import java.util.function.*;
 
@@ -160,6 +161,9 @@ public class HelloOpenXRVK {
     private long vkPipelineLayout;
     private long[] vkGraphicsPipelines;
 
+    private long vkDeviceMemory;
+    private long vkBigBuffer;
+
     private SwapchainWrapper[] swapchains;
     private int viewConfiguration;
     private int swapchainFormat;
@@ -275,8 +279,10 @@ public class HelloOpenXRVK {
             );
 
             PointerBuffer instancePtr = stack.mallocPointer(1);
+            System.out.println("Create instance...");
             xrCheck(XR10.xrCreateInstance(createInfo, instancePtr), "CreateInstance");
             xrInstance = new XrInstance(instancePtr.get(0), createInfo);
+            System.out.println("Created instance");
         }
     }
 
@@ -539,11 +545,41 @@ public class HelloOpenXRVK {
     }
 
     private void destroyVk() {
-        if (vkDebugMessenger != 0L) {
-            vkDestroyDebugUtilsMessengerEXT(vkInstance, vkDebugMessenger, null);
+
+        if (this.vkRenderPass != 0) {
+            vkDestroyRenderPass(vkDevice, vkRenderPass, null);
         }
+
+        if (vkPipelineLayout != 0) {
+            vkDestroyPipelineLayout(vkDevice, vkPipelineLayout, null);
+        }
+
+        if (vkGraphicsPipelines != null) {
+            for (int pipelineIndex = 0; pipelineIndex < vkGraphicsPipelines.length; pipelineIndex++) {
+                long graphicsPipeline = vkGraphicsPipelines[pipelineIndex];
+                if (graphicsPipeline != 0 && (pipelineIndex == 0 || graphicsPipeline != vkGraphicsPipelines[pipelineIndex - 1])) {
+                    vkDestroyPipeline(vkDevice, graphicsPipeline, null);
+                }
+            }
+        }
+
+        if (vkCommandPool != 0) {
+            vkDestroyCommandPool(vkDevice, vkCommandPool, null);
+        }
+
+        if (vkBigBuffer != 0) {
+            vkDestroyBuffer(vkDevice, vkBigBuffer, null);
+        }
+        if (vkDeviceMemory != 0) {
+            vkFreeMemory(vkDevice, vkDeviceMemory, null);
+        }
+
         if (vkDevice != null) {
             vkDestroyDevice(vkDevice, null);
+        }
+
+        if (vkDebugMessenger != 0L) {
+            vkDestroyDebugUtilsMessengerEXT(vkInstance, vkDebugMessenger, null);
         }
         if (vkInstance != null) {
             vkDestroyInstance(vkInstance, null);
@@ -638,6 +674,132 @@ public class HelloOpenXRVK {
         throw new IllegalArgumentException("Failed to find suitable memory type for resource");
     }
 
+    private static final float[][] QUAD_OFFSETS = {
+        {-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}
+    };
+
+    private static class CubePlane {
+
+        final float constantX, constantY, constantZ;
+        final float factorX, factorY, factorZ;
+        final int offsetX, offsetY, offsetZ;
+        final int colorIndex;
+
+        CubePlane(
+            float constantX, float constantY, float constantZ,
+            float factorX, float factorY, float factorZ,
+            int offsetX, int offsetY, int offsetZ, int colorIndex
+        ) {
+            this.constantX = constantX;
+            this.constantY = constantY;
+            this.constantZ = constantZ;
+
+            this.factorX = factorX;
+            this.factorY = factorY;
+            this.factorZ = factorZ;
+
+            this.offsetX = offsetX;
+            this.offsetY = offsetY;
+            this.offsetZ = offsetZ;
+
+            this.colorIndex = colorIndex;
+        }
+    }
+
+    private static final CubePlane[] CUBE_PLANES = {
+        // Bottom
+        new CubePlane(
+            0, -1, 0, 1, 0, -1,
+            0, 2, 1, 0
+        ),
+        // Top
+        new CubePlane(
+            0, 1, 0, 1, 0, 1,
+            0, 2, 1, 1
+        ),
+        // Left
+        new CubePlane(
+            -1, 0, 0, 0, 1, -1,
+            2, 1, 0, 2
+        ),
+        // Right
+        new CubePlane(
+            1, 0, 0, 0, 1, 1,
+            2, 1, 0, 3
+        ),
+        // Front
+        new CubePlane(
+            0, 0, -1, 1, 1, 0,
+            0, 1, 2, 4
+        ),
+        // Back
+        new CubePlane(
+            0, 0, 1, -1, 1, 0,
+            0, 1, 2, 5
+        )
+    };
+
+    private static void putVertexData(ByteBuffer dest) {
+
+        Random random = new Random(87234);
+        for (int cubeIndex = 0; cubeIndex < BigModel.NUM_CUBES; cubeIndex++) {
+
+            float midX = 2f * random.nextFloat() - 1f;
+            float midY = 2f * random.nextFloat() - 1f;
+            float midZ = random.nextFloat();
+
+            // Each side has its own color
+            float[] red = new float[6];
+            float[] green = new float[6];
+            float[] blue = new float[6];
+
+            for (int side = 0; side < 6; side++) {
+                red[side] = random.nextFloat();
+                green[side] = random.nextFloat();
+                blue[side] = random.nextFloat();
+            }
+
+            float size = 0.05f;
+
+            for (CubePlane plane : CUBE_PLANES) {
+                for (float[] offsets : QUAD_OFFSETS) {
+                    float cornerX = midX + size * (plane.constantX + offsets[plane.offsetX] * plane.factorX);
+                    float cornerY = midY + size * (plane.constantY + offsets[plane.offsetY] * plane.factorY);
+                    float cornerZ = midZ + size * (plane.constantZ + offsets[plane.offsetZ] * plane.factorZ);
+                    dest.putFloat(cornerX);
+                    dest.putFloat(cornerY);
+                    dest.putFloat(cornerZ);
+                    dest.putFloat(red[plane.colorIndex]);
+                    dest.putFloat(green[plane.colorIndex]);
+                    dest.putFloat(blue[plane.colorIndex]);
+                }
+            }
+        }
+    }
+
+    private static void putIndexData(ByteBuffer dest) {
+
+        int vertexIndex = 0;
+
+        for (int cubeCounter = 0; cubeCounter < BigModel.NUM_CUBES; cubeCounter++) {
+            for (int quadCounter = 0; quadCounter < 6; quadCounter++) {
+
+                int[] indexOffsets = {0, 1, 2, 2, 3, 0};
+                for (int indexOffset : indexOffsets) {
+                    if (INDEX_SIZE == 4) {
+                        dest.putInt(vertexIndex + indexOffset);
+                    } else if (INDEX_SIZE == 2) {
+                        dest.putShort((short) (vertexIndex + indexOffset));
+                    } else {
+                        throw new Error("Unexpected index size: " + INDEX_SIZE);
+                    }
+                }
+
+                vertexIndex += 4;
+            }
+        }
+    }
+
     private void createBuffers() {
         try (MemoryStack stack = stackPush()) {
 
@@ -651,7 +813,8 @@ public class HelloOpenXRVK {
             VkMemoryAllocateInfo aiSharedMemory = VkMemoryAllocateInfo.callocStack(stack);
             aiSharedMemory.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
             aiSharedMemory.allocationSize(sharedMemRequirements.size());
-            aiSharedMemory.memoryTypeIndex(chooseMemoryTypeIndex(sharedMemRequirements, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, stack));
+            aiSharedMemory.memoryTypeIndex(chooseMemoryTypeIndex(sharedMemRequirements,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, stack));
 
             LongBuffer pSharedMemory = stack.callocLong(1);
             vkCheck(vkAllocateMemory(vkDevice, aiSharedMemory, null, pSharedMemory), "AllocateMemory");
@@ -667,24 +830,26 @@ public class HelloOpenXRVK {
             sharedData.position(bigVertexSize);
             sharedData.limit(bigVertexSize + bigIndexSize);
             putIndexData(sharedData);
+            sharedData.position(0);
+            sharedData.limit(sharedData.capacity());
 
             VkMappedMemoryRange sharedMemoryRange = VkMappedMemoryRange.callocStack(stack);
             sharedMemoryRange.sType(VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE);
             sharedMemoryRange.memory(sharedMemory);
             sharedMemoryRange.offset(0);
-            sharedMemoryRange.size(sharedData.capacity());
+            sharedMemoryRange.size(VK_WHOLE_SIZE);
 
             vkCheck(vkFlushMappedMemoryRanges(vkDevice, sharedMemoryRange), "FlushMappedMemoryRanges");
             vkUnmapMemory(vkDevice, sharedMemory);
             vkCheck(vkBindBufferMemory(vkDevice, bigSharedBuffer, sharedMemory, 0), "BindBufferMemory");
 
-            long deviceBuffer = createBuffer(
+            this.vkBigBuffer = createBuffer(
                 bigVertexSize + bigIndexSize,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
             );
 
             VkMemoryRequirements deviceMemRequirements = VkMemoryRequirements.callocStack(stack);
-            vkGetBufferMemoryRequirements(vkDevice, deviceBuffer, deviceMemRequirements);;
+            vkGetBufferMemoryRequirements(vkDevice, vkBigBuffer, deviceMemRequirements);
 
             VkMemoryAllocateInfo aiDeviceMemory = VkMemoryAllocateInfo.callocStack(stack);
             aiDeviceMemory.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
@@ -693,18 +858,59 @@ public class HelloOpenXRVK {
 
             LongBuffer pDeviceMemory = stack.callocLong(1);
             vkCheck(vkAllocateMemory(vkDevice, aiSharedMemory, null, pDeviceMemory), "AllocateMemory");
-            long deviceMemory = pDeviceMemory.get(0);
+            this.vkDeviceMemory = pDeviceMemory.get(0);
 
-            vkCheck(vkBindBufferMemory(vkDevice, deviceBuffer, deviceMemory, 0), "BindBufferMemory");
+            vkCheck(vkBindBufferMemory(vkDevice, vkBigBuffer, vkDeviceMemory, 0), "BindBufferMemory");
 
             VkCommandBufferAllocateInfo aiCommandBuffer = VkCommandBufferAllocateInfo.callocStack(stack);
-            // TODO Fill in
+            aiCommandBuffer.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+            aiCommandBuffer.commandPool(vkCommandPool);
+            aiCommandBuffer.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+            aiCommandBuffer.commandBufferCount(1);
 
             PointerBuffer pCommandBuffer = stack.callocPointer(1);
             vkCheck(vkAllocateCommandBuffers(vkDevice, aiCommandBuffer, pCommandBuffer), "AllocateCommandBuffers");
             VkCommandBuffer copyCommandBuffer = new VkCommandBuffer(pCommandBuffer.get(0), vkDevice);
-            
-            // TODO Copy the shared buffer to the device buffer and destroy the shared buffer (and its memory)
+
+            VkCommandBufferBeginInfo biCommandBuffer = VkCommandBufferBeginInfo.callocStack(stack);
+            biCommandBuffer.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
+            biCommandBuffer.flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+
+            vkCheck(vkBeginCommandBuffer(copyCommandBuffer, biCommandBuffer), "BeginCommandBuffer");
+
+            VkBufferCopy.Buffer copyRegions = VkBufferCopy.callocStack(1, stack);
+            VkBufferCopy copyRegion = copyRegions.get(0);
+            copyRegion.srcOffset(0);
+            copyRegion.dstOffset(0);
+            copyRegion.size(bigVertexSize + bigIndexSize);
+
+            vkCmdCopyBuffer(copyCommandBuffer, bigSharedBuffer, vkBigBuffer, copyRegions);
+            vkEndCommandBuffer(copyCommandBuffer);
+
+            VkSubmitInfo submitInfo = VkSubmitInfo.callocStack(stack);
+            submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO);
+            submitInfo.waitSemaphoreCount(0); // I'm not sure why I need to set this explicitly
+            submitInfo.pWaitSemaphores(null);
+            submitInfo.pSignalSemaphores(null);
+            submitInfo.pWaitDstStageMask(null);
+            submitInfo.pCommandBuffers(stack.pointers(copyCommandBuffer.address()));
+
+            VkFenceCreateInfo ciFence = VkFenceCreateInfo.callocStack(stack);
+            ciFence.sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+            ciFence.flags(0);
+
+            LongBuffer pFence = stack.callocLong(1);
+            vkCheck(vkCreateFence(vkDevice, ciFence, null, pFence), "CreateFence");
+            long fence = pFence.get(0);
+
+            vkCheck(vkQueueSubmit(vkQueue, submitInfo, fence), "QueueSubmit");
+            vkCheck(vkWaitForFences(vkDevice, pFence, true, 1_000_000_000L), "WaitForFences");
+            vkCheck(vkQueueWaitIdle(vkQueue), "QueueWaitIdle");
+
+            vkFreeMemory(vkDevice, sharedMemory, null);
+            vkDestroyBuffer(vkDevice, bigSharedBuffer, null);
+            vkFreeCommandBuffers(vkDevice, vkCommandPool, copyCommandBuffer);
+            vkDestroyFence(vkDevice, fence, null);
         }
     }
 
@@ -1368,12 +1574,11 @@ public class HelloOpenXRVK {
     private void loopXrSession() {
 
         // This is a safety check for debugging. Set to 0 to disable this.
-        long endTime = System.currentTimeMillis() + 500;
+        long endTime = System.currentTimeMillis() + 5000;
 
         boolean startedSession = false;
 
         while (true) {
-            System.out.println("Iteration: session state is " + xrSessionState);
             try (MemoryStack stack = stackPush()) {
                 updateSessionState(stack);
 
@@ -1520,9 +1725,9 @@ public class HelloOpenXRVK {
 
                             vkCmdBeginRenderPass(commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
                             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkGraphicsPipelines[swapchainIndex]);
-                            vkCmdBindVertexBuffers(commandBuffer, firstVertexBinding, vertexBuffers, vertexOffsets);
-                            vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, INDEX_TYPE);
-                            vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
+                            vkCmdBindVertexBuffers(commandBuffer, 0, stack.longs(vkBigBuffer), stack.longs(0));
+                            vkCmdBindIndexBuffer(commandBuffer, vkBigBuffer, VERTEX_SIZE * BigModel.NUM_VERTICES, INDEX_TYPE);
+                            vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
                             vkCmdEndRenderPass(commandBuffer);
 
                             vkCheck(vkEndCommandBuffer(commandBuffer), "EndCommandBuffer");
@@ -1590,33 +1795,13 @@ public class HelloOpenXRVK {
             }
         }
 
-        if (vkCommandPool != 0) {
-            vkDestroyCommandPool(vkDevice, vkCommandPool, null);
-        }
+
 
         if (renderSpace != null) {
             xrDestroySpace(renderSpace);
         }
 
-        if (this.vkRenderPass != 0) {
-            vkDestroyRenderPass(vkDevice, vkRenderPass, null);
-        }
 
-        if (vkPipelineLayout != 0) {
-            vkDestroyPipelineLayout(vkDevice, vkPipelineLayout, null);
-        }
-
-        if (vkGraphicsPipelines != null) {
-            for (int pipelineIndex = 0; pipelineIndex < vkGraphicsPipelines.length; pipelineIndex++) {
-                long graphicsPipeline = vkGraphicsPipelines[pipelineIndex];
-                if (graphicsPipeline != 0 && (pipelineIndex == 0 || graphicsPipeline != vkGraphicsPipelines[pipelineIndex - 1])) {
-                    vkDestroyPipeline(vkDevice, graphicsPipeline, null);
-                }
-            }
-        }
-
-        // TODO Destroy vertex buffers
-        // TODO Destroy index buffers
     }
 
     private void destroyXrVkSession() {
