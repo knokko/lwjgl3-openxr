@@ -4,6 +4,7 @@
  */
 package org.lwjgl.demo.openxr;
 
+import org.joml.*;
 import org.lwjgl.*;
 import org.lwjgl.openxr.*;
 import org.lwjgl.system.*;
@@ -14,8 +15,10 @@ import java.lang.reflect.*;
 import java.nio.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.Random;
 import java.util.function.*;
 
+import static org.joml.Math.*;
 import static org.lwjgl.demo.openxr.HelloOpenXR.*;
 import static org.lwjgl.openxr.EXTDebugUtils.*;
 import static org.lwjgl.openxr.KHRVulkanEnable.*;
@@ -744,9 +747,9 @@ public class HelloOpenXRVK {
         Random random = new Random(87234);
         for (int cubeIndex = 0; cubeIndex < BigModel.NUM_CUBES; cubeIndex++) {
 
-            float midX = 2f * random.nextFloat() - 1f;
-            float midY = 2f * random.nextFloat() - 1f;
-            float midZ = random.nextFloat();
+            float midX = 60f * random.nextFloat() - 30f;
+            float midY = 60f * random.nextFloat() - 30f;
+            float midZ = 60f * random.nextFloat() - 30f;
 
             // Each side has its own color
             float[] red = new float[6];
@@ -759,7 +762,7 @@ public class HelloOpenXRVK {
                 blue[side] = random.nextFloat();
             }
 
-            float size = 0.05f;
+            float size = 1.5f;
 
             for (CubePlane plane : CUBE_PLANES) {
                 for (float[] offsets : QUAD_OFFSETS) {
@@ -1015,12 +1018,20 @@ public class HelloOpenXRVK {
 
     private void createGraphicsPipelines() {
         try (MemoryStack stack = stackPush()) {
+
+            VkPushConstantRange.Buffer pushConstants = VkPushConstantRange.callocStack(1, stack);
+            VkPushConstantRange cameraMatrix = pushConstants.get(0);
+            cameraMatrix.stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
+            cameraMatrix.offset(0);
+            // A matrix of 4x4 floats and 1 float needs 4 bytes
+            cameraMatrix.size(4 * 4 * 4);
+
             VkPipelineLayoutCreateInfo ciPipelineLayout = VkPipelineLayoutCreateInfo.callocStack(stack);
             ciPipelineLayout.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
             ciPipelineLayout.flags(0);
             // I will add uniform variables or push constants later
             ciPipelineLayout.pSetLayouts(null);
-            ciPipelineLayout.pPushConstantRanges(null);
+            ciPipelineLayout.pPushConstantRanges(pushConstants);
 
             LongBuffer pPipelineLayout = stack.callocLong(1);
             vkCheck(vkCreatePipelineLayout(vkDevice, ciPipelineLayout, null, pPipelineLayout), "CreatePipelineLayout");
@@ -1723,10 +1734,21 @@ public class HelloOpenXRVK {
                             ));
                             biRenderPass.pClearValues(clearValues);
 
+                            Matrix4f cameraMatrix = new Matrix4f().perspective(
+                                toRadians(70),
+                                (float) swapchain.width / swapchain.height,
+                                0.01f,
+                                100f,
+                                true
+                            );
+                            ByteBuffer cameraMatrixData = stack.calloc(4 * 4 * 4);
+                            cameraMatrix.get(cameraMatrixData);
+
                             vkCmdBeginRenderPass(commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
                             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkGraphicsPipelines[swapchainIndex]);
                             vkCmdBindVertexBuffers(commandBuffer, 0, stack.longs(vkBigBuffer), stack.longs(0));
                             vkCmdBindIndexBuffer(commandBuffer, vkBigBuffer, VERTEX_SIZE * BigModel.NUM_VERTICES, INDEX_TYPE);
+                            vkCmdPushConstants(commandBuffer, vkPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, cameraMatrixData);
                             vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
                             vkCmdEndRenderPass(commandBuffer);
 
