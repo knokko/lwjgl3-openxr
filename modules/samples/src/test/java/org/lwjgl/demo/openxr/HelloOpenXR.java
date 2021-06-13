@@ -692,7 +692,7 @@ public class HelloOpenXR {
         XrPosef       pose        = layerView.pose();
         XrVector3f    pos         = pose.position$();
         XrQuaternionf orientation = pose.orientation();
-        createProjectionFov(projectionMatrix, layerView.fov(), 0.1f, 100f);
+        createProjectionFov(projectionMatrix, layerView.fov(), 0.1f, 100f, false);
         viewMatrix.translationRotateScaleInvert(pos.x(), pos.y(), pos.z(), orientation.x(), orientation.y(), orientation.z(), orientation.w(), 1, 1, 1);
 
         glDisable(GL_CULL_FACE);    // Disable back-face culling so we can see the inside of the world-space cube and backside of the plane
@@ -766,7 +766,7 @@ public class HelloOpenXR {
         }
     }
 
-    private static Matrix4f createProjectionFov(Matrix4f dest, XrFovf fov, float nearZ, float farZ) {
+    static Matrix4f createProjectionFov(Matrix4f dest, XrFovf fov, float nearZ, float farZ, boolean zZeroToOne) {
         try (MemoryStack stack = stackPush()) {
             float tanLeft        = Math.tan(fov.angleLeft());
             float tanRight       = Math.tan(fov.angleRight());
@@ -788,8 +788,13 @@ public class HelloOpenXR {
 
             m.put(2, 0.0f);
             m.put(6, 0.0f);
-            m.put(10, -(farZ + nearZ) / (farZ - nearZ));
-            m.put(14, -(farZ * (nearZ + nearZ)) / (farZ - nearZ));
+            if (zZeroToOne) {
+                m.put(10, -farZ / (farZ - nearZ));
+                m.put(14, -(farZ * nearZ) / (farZ - nearZ));
+            } else {
+                m.put(10, -(farZ + nearZ) / (farZ - nearZ));
+                m.put(14, -(farZ * (nearZ + nearZ)) / (farZ - nearZ));
+            }
 
             m.put(3, 0.0f);
             m.put(7, 0.0f);
