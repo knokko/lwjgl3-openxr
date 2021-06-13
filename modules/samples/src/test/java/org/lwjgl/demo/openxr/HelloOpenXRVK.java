@@ -13,7 +13,6 @@ import org.lwjgl.vulkan.*;
 import java.io.*;
 import java.lang.reflect.*;
 import java.nio.*;
-import java.nio.file.*;
 import java.util.*;
 import java.util.Random;
 import java.util.function.*;
@@ -172,6 +171,10 @@ public class HelloOpenXRVK {
     private int swapchainFormat;
 
     private XrSpace renderSpace;
+
+    // The default value can be used in edge cases where the position tracking of the driver fails right at the start
+    // Let's hope it won't be used a lot
+    private Matrix4f lastCameraMatrix = new Matrix4f().perspective(toRadians(70f), 0.7f, 0.01f, 100f, true);
 
     private void start() {
         try {
@@ -1680,6 +1683,31 @@ public class HelloOpenXRVK {
                                 xrCheck(acquireResult, "AcquireSwapchainImage");
                             }
 
+                            Matrix4f cameraMatrix;
+                            if (projectionViews != null) {
+
+                                // If the position tracker is working, we should use it to create the camera matrix
+                                XrCompositionLayerProjectionView projectionView = projectionViews.get(swapchainIndex);
+                                Matrix4f projectionMatrix = new Matrix4f();
+                                createProjectionFov(projectionMatrix, projectionView.fov(), 0.01f, 100f, true);
+
+                                Matrix4f viewMatrix = new Matrix4f();
+                                XrVector3f position = projectionView.pose().position$();
+                                XrQuaternionf orientation = projectionView.pose().orientation();
+                                viewMatrix.translationRotateScaleInvert(
+                                    position.x(), position.y(), position.z(),
+                                    orientation.x(), orientation.y(), orientation.z(), orientation.w(),
+                                    1, 1, 1
+                                );
+
+                                cameraMatrix = projectionMatrix.mul(viewMatrix);
+                            } else {
+                                // When the position tracking is having issues, we will fall back to the previous one
+                                cameraMatrix = lastCameraMatrix;
+                            }
+
+                            lastCameraMatrix = cameraMatrix;
+
                             int imageIndex = pImageIndex.get(0);
 
                             XrSwapchainImageWaitInfo wiSwapchainImage = XrSwapchainImageWaitInfo.callocStack(stack);
@@ -1734,13 +1762,6 @@ public class HelloOpenXRVK {
                             ));
                             biRenderPass.pClearValues(clearValues);
 
-                            Matrix4f cameraMatrix = new Matrix4f().perspective(
-                                toRadians(70),
-                                (float) swapchain.width / swapchain.height,
-                                0.01f,
-                                100f,
-                                true
-                            );
                             ByteBuffer cameraMatrixData = stack.calloc(4 * 4 * 4);
                             cameraMatrix.get(cameraMatrixData);
 
