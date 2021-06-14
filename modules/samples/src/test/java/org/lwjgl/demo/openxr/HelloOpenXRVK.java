@@ -784,7 +784,6 @@ public class HelloOpenXRVK {
 
         // 1 more cube for the small model
         float size = 0.5f;
-
         for (CubePlane plane : CUBE_PLANES) {
             for (float[] offsets : QUAD_OFFSETS) {
                 float cornerX = size * (plane.constantX + offsets[plane.offsetX] * plane.factorX);
@@ -793,9 +792,9 @@ public class HelloOpenXRVK {
                 dest.putFloat(cornerX);
                 dest.putFloat(cornerY);
                 dest.putFloat(cornerZ);
-                dest.putFloat(max(0f, plane.constantX));
-                dest.putFloat(max(0f, plane.constantY));
-                dest.putFloat(max(0f, plane.constantZ));
+                dest.putFloat(max(0f, abs(plane.constantX)));
+                dest.putFloat(max(0f, abs(plane.constantY)));
+                dest.putFloat(max(0f, abs(plane.constantZ)));
             }
         }
     }
@@ -1793,10 +1792,10 @@ public class HelloOpenXRVK {
                             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkGraphicsPipelines[swapchainIndex]);
                             vkCmdPushConstants(commandBuffer, vkPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, cameraMatrixData);
                             vkCmdBindVertexBuffers(commandBuffer, 0, stack.longs(vkBigBuffer), stack.longs(0));
-                            vkCmdBindIndexBuffer(commandBuffer, vkBigBuffer, VERTEX_SIZE * BigModel.NUM_VERTICES, INDEX_TYPE);
+                            vkCmdBindIndexBuffer(commandBuffer, vkBigBuffer, VERTEX_SIZE * (BigModel.NUM_VERTICES + 4 * 6), INDEX_TYPE);
 
                             // Draw big model
-                            //vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
+                            vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
 
                             // Draw small model
                             vkCmdDrawIndexed(commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
