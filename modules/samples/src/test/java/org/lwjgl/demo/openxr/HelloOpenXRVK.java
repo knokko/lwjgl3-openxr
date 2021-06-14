@@ -781,6 +781,23 @@ public class HelloOpenXRVK {
                 }
             }
         }
+
+        // 1 more cube for the small model
+        float size = 0.5f;
+
+        for (CubePlane plane : CUBE_PLANES) {
+            for (float[] offsets : QUAD_OFFSETS) {
+                float cornerX = size * (plane.constantX + offsets[plane.offsetX] * plane.factorX);
+                float cornerY = size * (plane.constantY + offsets[plane.offsetY] * plane.factorY);
+                float cornerZ = size * (plane.constantZ + offsets[plane.offsetZ] * plane.factorZ);
+                dest.putFloat(cornerX);
+                dest.putFloat(cornerY);
+                dest.putFloat(cornerZ);
+                dest.putFloat(max(0f, plane.constantX));
+                dest.putFloat(max(0f, plane.constantY));
+                dest.putFloat(max(0f, plane.constantZ));
+            }
+        }
     }
 
     private static void putIndexData(ByteBuffer dest) {
@@ -811,10 +828,17 @@ public class HelloOpenXRVK {
 
             int bigVertexSize = BigModel.NUM_VERTICES * VERTEX_SIZE;
             int bigIndexSize = BigModel.NUM_INDICES * INDEX_SIZE;
-            long bigSharedBuffer = createBuffer(bigVertexSize + bigIndexSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+
+            // The small model only needs 1 cube
+            int smallVertexSize = 6 * 4 * VERTEX_SIZE;
+            // We can just reuse the indices of the big model because the ones for the small model should be a substring of it
+
+            int totalVertexSize = bigVertexSize + smallVertexSize;
+
+            long sharedBuffer = createBuffer(totalVertexSize + bigIndexSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
 
             VkMemoryRequirements sharedMemRequirements = VkMemoryRequirements.callocStack(stack);
-            vkGetBufferMemoryRequirements(vkDevice, bigSharedBuffer, sharedMemRequirements);
+            vkGetBufferMemoryRequirements(vkDevice, sharedBuffer, sharedMemRequirements);
 
             VkMemoryAllocateInfo aiSharedMemory = VkMemoryAllocateInfo.callocStack(stack);
             aiSharedMemory.sType(VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO);
@@ -829,12 +853,12 @@ public class HelloOpenXRVK {
             PointerBuffer ppSharedData = stack.callocPointer(1);
             vkCheck(vkMapMemory(vkDevice, sharedMemory, 0, VK_WHOLE_SIZE, 0, ppSharedData), "MapMemory");
 
-            ByteBuffer sharedData = memByteBuffer(ppSharedData.get(0), bigVertexSize + bigIndexSize);
+            ByteBuffer sharedData = memByteBuffer(ppSharedData.get(0), totalVertexSize + bigIndexSize);
             sharedData.position(0);
-            sharedData.limit(bigVertexSize);
+            sharedData.limit(totalVertexSize);
             putVertexData(sharedData);
-            sharedData.position(bigVertexSize);
-            sharedData.limit(bigVertexSize + bigIndexSize);
+            sharedData.position(totalVertexSize);
+            sharedData.limit(totalVertexSize + bigIndexSize);
             putIndexData(sharedData);
             sharedData.position(0);
             sharedData.limit(sharedData.capacity());
@@ -847,10 +871,10 @@ public class HelloOpenXRVK {
 
             vkCheck(vkFlushMappedMemoryRanges(vkDevice, sharedMemoryRange), "FlushMappedMemoryRanges");
             vkUnmapMemory(vkDevice, sharedMemory);
-            vkCheck(vkBindBufferMemory(vkDevice, bigSharedBuffer, sharedMemory, 0), "BindBufferMemory");
+            vkCheck(vkBindBufferMemory(vkDevice, sharedBuffer, sharedMemory, 0), "BindBufferMemory");
 
             this.vkBigBuffer = createBuffer(
-                bigVertexSize + bigIndexSize,
+                totalVertexSize + bigIndexSize,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
             );
 
@@ -888,9 +912,9 @@ public class HelloOpenXRVK {
             VkBufferCopy copyRegion = copyRegions.get(0);
             copyRegion.srcOffset(0);
             copyRegion.dstOffset(0);
-            copyRegion.size(bigVertexSize + bigIndexSize);
+            copyRegion.size(totalVertexSize + bigIndexSize);
 
-            vkCmdCopyBuffer(copyCommandBuffer, bigSharedBuffer, vkBigBuffer, copyRegions);
+            vkCmdCopyBuffer(copyCommandBuffer, sharedBuffer, vkBigBuffer, copyRegions);
             vkEndCommandBuffer(copyCommandBuffer);
 
             VkSubmitInfo submitInfo = VkSubmitInfo.callocStack(stack);
@@ -914,7 +938,7 @@ public class HelloOpenXRVK {
             vkCheck(vkQueueWaitIdle(vkQueue), "QueueWaitIdle");
 
             vkFreeMemory(vkDevice, sharedMemory, null);
-            vkDestroyBuffer(vkDevice, bigSharedBuffer, null);
+            vkDestroyBuffer(vkDevice, sharedBuffer, null);
             vkFreeCommandBuffers(vkDevice, vkCommandPool, copyCommandBuffer);
             vkDestroyFence(vkDevice, fence, null);
         }
@@ -1767,10 +1791,16 @@ public class HelloOpenXRVK {
 
                             vkCmdBeginRenderPass(commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
                             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkGraphicsPipelines[swapchainIndex]);
+                            vkCmdPushConstants(commandBuffer, vkPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, cameraMatrixData);
                             vkCmdBindVertexBuffers(commandBuffer, 0, stack.longs(vkBigBuffer), stack.longs(0));
                             vkCmdBindIndexBuffer(commandBuffer, vkBigBuffer, VERTEX_SIZE * BigModel.NUM_VERTICES, INDEX_TYPE);
-                            vkCmdPushConstants(commandBuffer, vkPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, cameraMatrixData);
-                            vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
+
+                            // Draw big model
+                            //vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
+
+                            // Draw small model
+                            vkCmdDrawIndexed(commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
+
                             vkCmdEndRenderPass(commandBuffer);
 
                             vkCheck(vkEndCommandBuffer(commandBuffer), "EndCommandBuffer");
