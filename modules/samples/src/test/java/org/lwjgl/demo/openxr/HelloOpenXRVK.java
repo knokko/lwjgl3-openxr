@@ -182,6 +182,7 @@ public class HelloOpenXRVK {
             initXrSystem();
             initVk();
             createXrVkSession();
+            initXrActions();
             createRenderResources();
             loopXrSession();
         } catch (RuntimeException ex) {
@@ -304,6 +305,43 @@ public class HelloOpenXRVK {
             xrSystemId = pSystemId.get(0);
 
             System.out.println("System ID is " + xrSystemId);
+        }
+    }
+
+    private void initXrActions() {
+        try (MemoryStack stack = stackPush()) {
+
+            XrActionSetCreateInfo ciActionSet = XrActionSetCreateInfo.callocStack(stack);
+            ciActionSet.type(XR_TYPE_ACTION_SET_CREATE_INFO);
+            ciActionSet.priority(1);
+            ciActionSet.actionSetName(stack.UTF8("handcontrols"));
+            ciActionSet.localizedActionSetName(stack.UTF8("Demo Hand Controls"));
+
+            PointerBuffer pActionSet = stack.callocPointer(1);
+            xrCheck(xrCreateActionSet(xrInstance, ciActionSet, pActionSet), "CreateActionSet");
+            XrActionSet actionSet = new XrActionSet(pActionSet.get(0), xrVkSession);
+
+            LongBuffer pLeftHandPath = stack.callocLong(1);
+            LongBuffer pRightHandPath = stack.callocLong(1);
+            xrCheck(xrStringToPath(xrInstance, stack.UTF8("/user/hand/left"), pLeftHandPath), "StringToPath");
+            xrCheck(xrStringToPath(xrInstance, stack.UTF8("/user/hand/right"), pRightHandPath), "StringToPath");
+            long leftHandPath = pLeftHandPath.get(0);
+            long rightHandPath = pRightHandPath.get(0);
+
+            XrActionCreateInfo ciActionHands = XrActionCreateInfo.callocStack(stack);
+            ciActionHands.type(XR_TYPE_ACTION_CREATE_INFO);
+            ciActionHands.actionType(XR_ACTION_TYPE_POSE_INPUT);
+            ciActionHands.actionName(stack.UTF8("handpose"));
+            ciActionHands.localizedActionName(stack.UTF8("Hand pose"));
+            ciActionHands.subactionPaths(stack.longs(leftHandPath, rightHandPath));
+
+            PointerBuffer pActionHands = stack.callocPointer(1);
+            xrCheck(xrCreateAction(actionSet, ciActionHands, pActionHands), "CreateAction");
+            XrAction actionHands = new XrAction(pActionHands.get(0), xrVkSession);
+
+            // TODO Also create a handTrigger action
+
+            // TODO Bind the hand action and use it during rendering
         }
     }
 
