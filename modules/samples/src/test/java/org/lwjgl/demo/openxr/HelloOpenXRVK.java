@@ -1697,6 +1697,69 @@ public class HelloOpenXRVK {
         }
     }
 
+    private static class HandStates {
+
+        final Vector3f leftPosition, rightPosition;
+        final Quaternionf leftRotation, rightRotation;
+
+        HandStates(Vector3f leftPosition, Vector3f rightPosition, Quaternionf leftRotation, Quaternionf rightRotation) {
+            this.leftPosition = leftPosition;
+            this.rightPosition = rightPosition;
+            this.leftRotation = leftRotation;
+            this.rightRotation = rightRotation;
+        }
+    }
+
+    private HandStates getHandStates(MemoryStack stack, long time) {
+
+        XrActiveActionSet.Buffer activeActionSets = XrActiveActionSet.callocStack(1, stack);
+        XrActiveActionSet activeActionSet = activeActionSets.get(0);
+        activeActionSet.actionSet(xrActionSet);
+        activeActionSet.subactionPath(XR_NULL_PATH);
+
+        XrActionsSyncInfo siActions = XrActionsSyncInfo.callocStack(stack);
+        siActions.type(XR_TYPE_ACTIONS_SYNC_INFO);
+        siActions.activeActionSets(activeActionSets);
+
+        xrCheck(xrSyncActions(xrVkSession, siActions), "SyncActions");
+
+        XrSpaceLocation leftHandLocation = XrSpaceLocation.callocStack(stack);
+        leftHandLocation.type(XR_TYPE_SPACE_LOCATION);
+
+        XrSpaceLocation rightHandLocation = XrSpaceLocation.callocStack(stack);
+        rightHandLocation.type(XR_TYPE_SPACE_LOCATION);
+
+        xrCheck(xrLocateSpace(xrLeftHandSpace, renderSpace, time, leftHandLocation), "LocateSpace");
+        xrCheck(xrLocateSpace(xrRightHandSpace, renderSpace, time, rightHandLocation), "LocateSpace");
+
+        Vector3f leftHandPosition = null;
+        Vector3f rightHandPosition = null;
+
+        if ((leftHandLocation.locationFlags() & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0) {
+            XrVector3f pos = leftHandLocation.pose().position$();
+            leftHandPosition = new Vector3f(pos.x(), pos.y(), pos.z());
+        }
+        if ((rightHandLocation.locationFlags() & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0) {
+            XrVector3f pos = rightHandLocation.pose().position$();
+            rightHandPosition = new Vector3f(pos.x(), pos.y(), pos.z());
+        }
+
+        Quaternionf leftHandRotation = null;
+        Quaternionf rightHandRotation = null;
+
+        if ((leftHandLocation.locationFlags() & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0) {
+            XrQuaternionf rot = leftHandLocation.pose().orientation();
+            leftHandRotation = new Quaternionf(rot.x(), rot.y(), rot.z(), rot.w());
+        }
+
+        if ((rightHandLocation.locationFlags() & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0) {
+            XrQuaternionf rot = rightHandLocation.pose().orientation();
+            rightHandRotation = new Quaternionf(rot.x(), rot.y(), rot.z(), rot.w());
+        }
+
+        return new HandStates(leftHandPosition, rightHandPosition, leftHandRotation, rightHandRotation);
+    }
+
     private void loopXrSession() {
 
         // This is a safety check for debugging. Set to 0 to disable this.
@@ -1787,30 +1850,28 @@ public class HelloOpenXRVK {
                             layers = stack.pointers(layer.address());
                         }
 
-                        XrActiveActionSet.Buffer activeActionSets = XrActiveActionSet.callocStack(1, stack);
-                        XrActiveActionSet activeActionSet = activeActionSets.get(0);
-                        activeActionSet.actionSet(xrActionSet);
-                        activeActionSet.subactionPath(XR_NULL_PATH);
+                        HandStates handStates = getHandStates(stack, frameState.predictedDisplayTime());
 
-                        XrActionsSyncInfo siActions = XrActionsSyncInfo.callocStack(stack);
-                        siActions.type(XR_TYPE_ACTIONS_SYNC_INFO);
-                        siActions.activeActionSets(activeActionSets);
+                        // TODO Figure out which of the two gets computed correctly
+                        Matrix4f leftHandMatrix = null;
+                        if (handStates.leftPosition != null) {
+                            leftHandMatrix = new Matrix4f().translate(handStates.leftPosition);
 
-                        xrCheck(xrSyncActions(xrVkSession, siActions), "SyncActions");
+                            if (handStates.leftRotation != null) {
+                                leftHandMatrix.rotate(handStates.leftRotation);
+                            }
+                        }
 
-                        XrSpaceLocation leftHandLocation = XrSpaceLocation.callocStack(stack);
-                        leftHandLocation.type(XR_TYPE_SPACE_LOCATION);
+                        Matrix4f rightHandMatrix = null;
+                        if (handStates.rightPosition != null) {
+                            rightHandMatrix = new Matrix4f();
 
-                        XrSpaceLocation rightHandLocation = XrSpaceLocation.callocStack(stack);
-                        rightHandLocation.type(XR_TYPE_SPACE_LOCATION);
+                            if (handStates.rightRotation != null) {
+                                rightHandMatrix.rotate(handStates.rightRotation);
+                            }
 
-                        // TODO Finish this
-                        xrCheck(xrLocateSpace(xrLeftHandSpace, renderSpace, frameState.predictedDisplayTime(), leftHandLocation), "LocateSpace");
-                        xrCheck(xrLocateSpace(xrRightHandSpace, renderSpace, frameState.predictedDisplayTime(), rightHandLocation), "LocateSpace");
-
-                        XrVector3f leftHandPosition = leftHandLocation.pose().position$();
-                        XrVector3f rightHandPosition = rightHandLocation.pose().position$();
-                        System.out.println("Left hand " + leftHandLocation.locationFlags() + ": " + leftHandLocation.pose().position$().x());
+                            rightHandMatrix.translate(handStates.rightPosition);
+                        }
 
                         for (int swapchainIndex = 0; swapchainIndex < swapchains.length; swapchainIndex++) {
                             SwapchainWrapper swapchain = this.swapchains[swapchainIndex];
@@ -1912,6 +1973,7 @@ public class HelloOpenXRVK {
                             vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
 
                             // Draw small model
+                            // TODO Add transformation matrix and check if hands are tracked before drawing
                             vkCmdDrawIndexed(commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
 
                             vkCmdEndRenderPass(commandBuffer);
