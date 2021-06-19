@@ -5,6 +5,7 @@
 package org.lwjgl.demo.openxr;
 
 import org.joml.*;
+import org.joml.Math;
 import org.lwjgl.*;
 import org.lwjgl.openxr.*;
 import org.lwjgl.system.*;
@@ -1135,11 +1136,12 @@ public class HelloOpenXRVK {
         try (MemoryStack stack = stackPush()) {
 
             VkPushConstantRange.Buffer pushConstants = VkPushConstantRange.callocStack(1, stack);
-            VkPushConstantRange cameraMatrix = pushConstants.get(0);
-            cameraMatrix.stageFlags(VK_SHADER_STAGE_VERTEX_BIT);
-            cameraMatrix.offset(0);
-            // A matrix of 4x4 floats and 1 float needs 4 bytes
-            cameraMatrix.size(4 * 4 * 4);
+            VkPushConstantRange pushConstant = pushConstants.get(0);
+            pushConstant.stageFlags(VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+            pushConstant.offset(0);
+            // 1 matrix of 4x4 floats (4 bytes per float)
+            // and 1 boolean that needs 4 bytes
+            pushConstant.size(4 * 4 * 4 + 4);
 
             VkPipelineLayoutCreateInfo ciPipelineLayout = VkPipelineLayoutCreateInfo.callocStack(stack);
             ciPipelineLayout.sType(VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO);
@@ -1763,7 +1765,7 @@ public class HelloOpenXRVK {
     private void loopXrSession() {
 
         // This is a safety check for debugging. Set to 0 to disable this.
-        long endTime = System.currentTimeMillis() + 50_000;
+        long endTime = System.currentTimeMillis() + 10_000;
 
         boolean startedSession = false;
 
@@ -1960,21 +1962,36 @@ public class HelloOpenXRVK {
                             ));
                             biRenderPass.pClearValues(clearValues);
 
-                            ByteBuffer cameraMatrixData = stack.calloc(4 * 4 * 4);
-                            cameraMatrix.get(cameraMatrixData);
+                            ByteBuffer pushConstants = stack.calloc(4 * 4 * 4 + 4);
+                            cameraMatrix.get(pushConstants);
 
+                            // Try setting it to true
+                            if (Math.random() > 0.5) {
+                                pushConstants.putInt(4 * 4 * 4, 1);
+                            }
+
+                            int stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
                             vkCmdBeginRenderPass(commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
                             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkGraphicsPipelines[swapchainIndex]);
-                            vkCmdPushConstants(commandBuffer, vkPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, cameraMatrixData);
+                            vkCmdPushConstants(commandBuffer, vkPipelineLayout, stageFlags, 0, pushConstants);
                             vkCmdBindVertexBuffers(commandBuffer, 0, stack.longs(vkBigBuffer), stack.longs(0));
                             vkCmdBindIndexBuffer(commandBuffer, vkBigBuffer, VERTEX_SIZE * (BigModel.NUM_VERTICES + 4 * 6), INDEX_TYPE);
 
                             // Draw big model
                             vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
 
-                            // Draw small model
-                            // TODO Add transformation matrix and check if hands are tracked before drawing
-                            vkCmdDrawIndexed(commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
+                            // Draw (small) hand models if hand locations are known
+                            if (leftHandMatrix != null) {
+                                cameraMatrix.mul(leftHandMatrix, new Matrix4f()).get(pushConstants);
+                                vkCmdPushConstants(commandBuffer, vkPipelineLayout, stageFlags, 0, pushConstants);
+                                vkCmdDrawIndexed(commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
+                            }
+
+                            if (rightHandMatrix != null) {
+                                cameraMatrix.mul(rightHandMatrix, new Matrix4f()).get(pushConstants);
+                                vkCmdPushConstants(commandBuffer, vkPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, pushConstants);
+                                vkCmdDrawIndexed(commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
+                            }
 
                             vkCmdEndRenderPass(commandBuffer);
 
