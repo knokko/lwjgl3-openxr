@@ -419,16 +419,9 @@ public class HelloOpenXRVK {
 
             ByteBuffer pXrVkInstanceExtensions = stack.calloc(pCapXrVkInstanceExtensions.get(0));
             xrCheck(xrGetVulkanInstanceExtensionsKHR(xrInstance, xrSystemId, pCapXrVkInstanceExtensions, pXrVkInstanceExtensions), "GetVulkanInstanceExtensions");
-            String[] xrVkInstanceExtensions = memUTF8(pXrVkInstanceExtensions).split(" ");
-            if (xrVkInstanceExtensions.length > 0) {
-                String lastXrVkExtension = xrVkInstanceExtensions[xrVkInstanceExtensions.length - 1];
-                int lastCharId = lastXrVkExtension.charAt(lastXrVkExtension.length() - 1);
 
-                // It looks like the last string is null-terminated, which causes problems...
-                if (lastCharId == 0) {
-                    xrVkInstanceExtensions[xrVkInstanceExtensions.length - 1] = lastXrVkExtension.substring(0, lastXrVkExtension.length() - 1);
-                }
-            }
+            // NOTE: The call to memAddress is important because LWJGL doesn't expect byte buffers to end with the null char
+            String[] xrVkInstanceExtensions = memUTF8(memAddress(pXrVkInstanceExtensions)).split(" ");
 
             System.out.println(xrVkInstanceExtensions.length + " Vulkan instance extensions are required for OpenXR:");
             for (String xrVkExtension : xrVkInstanceExtensions) {
@@ -554,18 +547,8 @@ public class HelloOpenXRVK {
             ByteBuffer pXrDeviceExtensions = stack.calloc(pCapXrDeviceExtensions.get(0));
 
             xrCheck(xrGetVulkanDeviceExtensionsKHR(xrInstance, xrSystemId, pCapXrDeviceExtensions, pXrDeviceExtensions), "GetVulkanDeviceExtensions");
-            String[] xrDeviceExtensions = memUTF8(pXrDeviceExtensions).split(" ");
-            if (xrDeviceExtensions.length > 0) {
-                int lastIndex = xrDeviceExtensions.length - 1;
-                String lastExtension = xrDeviceExtensions[lastIndex];
-                int length = lastExtension.length();
-                int lastChar = lastExtension.charAt(length - 1);
-
-                // Filter out the last null terminator, if needed
-                if (lastChar == 0) {
-                    xrDeviceExtensions[lastIndex] = lastExtension.substring(0, length - 1);
-                }
-            }
+            // NOTE: The memAddress call is important because LWJGL doesn't expect byte buffers to contain the 0 char
+            String[] xrDeviceExtensions = memUTF8(memAddress(pXrDeviceExtensions)).split(" ");
 
             System.out.println(xrDeviceExtensions.length + " Vulkan device extensions are required for OpenXR:");
             for (String extension : xrDeviceExtensions) {
@@ -866,7 +849,7 @@ public class HelloOpenXRVK {
         }
 
         // 1 more cube for the small model
-        float size = 0.5f;
+        float size = 0.15f;
         for (CubePlane plane : CUBE_PLANES) {
             for (float[] offsets : QUAD_OFFSETS) {
                 float cornerX = size * (plane.constantX + offsets[plane.offsetX] * plane.factorX);
