@@ -52,7 +52,11 @@ public class XRHelper {
         m.put(12, 0.0f);
 
         m.put(1, 0.0f);
-        m.put(5, 2.0f / tanAngleHeight);
+        if (zZeroToOne) {
+            m.put(5, -2.0f / tanAngleHeight);
+        } else {
+            m.put(5, 2.0f / tanAngleHeight);
+        }
         m.put(9, (tanUp + tanDown) / tanAngleHeight);
         m.put(13, 0.0f);
 
