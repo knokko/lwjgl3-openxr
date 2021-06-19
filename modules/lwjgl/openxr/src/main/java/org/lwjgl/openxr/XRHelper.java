@@ -43,7 +43,12 @@ public class XRHelper {
         float tanDown        = (float)Math.tan(fov.angleDown());
         float tanUp          = (float)Math.tan(fov.angleUp());
         float tanAngleWidth  = tanRight - tanLeft;
-        float tanAngleHeight = tanUp - tanDown;
+        float tanAngleHeight;
+        if (zZeroToOne) {
+            tanAngleHeight = tanDown - tanUp;
+        } else {
+            tanAngleHeight = tanUp - tanDown;
+        }
 
         FloatBuffer m = stack.mallocFloat(16);
         m.put(0, 2.0f / tanAngleWidth);
@@ -52,11 +57,7 @@ public class XRHelper {
         m.put(12, 0.0f);
 
         m.put(1, 0.0f);
-        if (zZeroToOne) {
-            m.put(5, -2.0f / tanAngleHeight);
-        } else {
-            m.put(5, 2.0f / tanAngleHeight);
-        }
+        m.put(5, 2.0f / tanAngleHeight);
         m.put(9, (tanUp + tanDown) / tanAngleHeight);
         m.put(13, 0.0f);
 
