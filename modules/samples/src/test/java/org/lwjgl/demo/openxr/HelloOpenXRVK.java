@@ -5,7 +5,6 @@
 package org.lwjgl.demo.openxr;
 
 import org.joml.*;
-import org.joml.Math;
 import org.lwjgl.*;
 import org.lwjgl.openxr.*;
 import org.lwjgl.system.*;
@@ -19,7 +18,6 @@ import java.util.Random;
 import java.util.function.*;
 
 import static org.joml.Math.*;
-import static org.lwjgl.demo.openxr.HelloOpenXR.*;
 import static org.lwjgl.openxr.EXTDebugUtils.*;
 import static org.lwjgl.openxr.KHRVulkanEnable.*;
 import static org.lwjgl.openxr.XR10.*;
@@ -209,9 +207,7 @@ public class HelloOpenXRVK {
             IntBuffer pNumLayers = stack.callocInt(1);
             xrEnumerateApiLayerProperties(pNumLayers, null);
             int numLayers = pNumLayers.get(0);
-            XrApiLayerProperties.Buffer pLayers = new XrApiLayerProperties.Buffer(
-                mallocAndFillBufferStack(numLayers, XrApiLayerProperties.SIZEOF, XR_TYPE_API_LAYER_PROPERTIES)
-            );
+            XrApiLayerProperties.Buffer pLayers = XRHelper.prepareApiLayerProperties(stack, numLayers);
             xrCheck(xrEnumerateApiLayerProperties(pNumLayers, pLayers), "EnumerateApiLayerProperties");
             System.out.println(numLayers + " XR layers are available:");
             for (int index = 0; index < numLayers; index++) {
@@ -227,10 +223,7 @@ public class HelloOpenXRVK {
             XR10.xrEnumerateInstanceExtensionProperties((ByteBuffer)null, pNumExtensions, null);
             int numExtensions = pNumExtensions.get(0);
 
-            XrExtensionProperties.Buffer properties = new XrExtensionProperties.Buffer(
-                mallocAndFillBufferStack(numExtensions, XrExtensionProperties.SIZEOF, XR10.XR_TYPE_EXTENSION_PROPERTIES)
-            );
-
+            XrExtensionProperties.Buffer properties = XRHelper.prepareExtensionProperties(stack, numExtensions);
             xrCheck(XR10.xrEnumerateInstanceExtensionProperties((ByteBuffer)null, pNumExtensions, properties), "EnumerateInstanceExtensionProperties");
 
             System.out.printf("OpenXR loaded with %d extensions:%n", numExtensions);
@@ -1889,7 +1882,7 @@ public class HelloOpenXRVK {
                                 // If the position tracker is working, we should use it to create the camera matrix
                                 XrCompositionLayerProjectionView projectionView = projectionViews.get(swapchainIndex);
                                 Matrix4f projectionMatrix = new Matrix4f();
-                                createProjectionFov(projectionMatrix, projectionView.fov(), 0.01f, 100f, true);
+                                projectionMatrix.set(XRHelper.createProjectionMatrixBuffer(stack, projectionView.fov(), 0.01f, 100f, true));
 
                                 Matrix4f viewMatrix = new Matrix4f();
                                 XrVector3f position = projectionView.pose().position$();
@@ -1939,9 +1932,9 @@ public class HelloOpenXRVK {
                             vkCheck(vkBeginCommandBuffer(commandBuffer, biCommandBuffer), "BeginCommandBuffer");
 
                             VkClearColorValue clearColorValue = VkClearColorValue.callocStack(stack);
-                            clearColorValue.float32(0, 0.8f);
+                            clearColorValue.float32(0, 0.1f);
                             clearColorValue.float32(1, 0.2f);
-                            clearColorValue.float32(2, 0.7f);
+                            clearColorValue.float32(2, 0.92f);
                             clearColorValue.float32(3, 1f);
 
                             VkClearDepthStencilValue clearDepthValue = VkClearDepthStencilValue.callocStack(stack);
@@ -1965,11 +1958,6 @@ public class HelloOpenXRVK {
                             ByteBuffer pushConstants = stack.calloc(4 * 4 * 4 + 4);
                             cameraMatrix.get(pushConstants);
 
-                            // Try setting it to true
-                            if (Math.random() > 0.5) {
-                                pushConstants.putInt(4 * 4 * 4, 1);
-                            }
-
                             int stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
                             vkCmdBeginRenderPass(commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
                             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkGraphicsPipelines[swapchainIndex]);
@@ -1981,6 +1969,7 @@ public class HelloOpenXRVK {
                             vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
 
                             // Draw (small) hand models if hand locations are known
+                            // TODO Invert the colors if the corresponding hand trigger is pressed
                             if (leftHandMatrix != null) {
                                 cameraMatrix.mul(leftHandMatrix, new Matrix4f()).get(pushConstants);
                                 vkCmdPushConstants(commandBuffer, vkPipelineLayout, stageFlags, 0, pushConstants);
