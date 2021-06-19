@@ -1830,7 +1830,6 @@ public class HelloOpenXRVK {
 
                         HandStates handStates = getHandStates(stack, frameState.predictedDisplayTime());
 
-                        // TODO Figure out which of the two gets computed correctly
                         Matrix4f leftHandMatrix = null;
                         if (handStates.leftPosition != null) {
                             leftHandMatrix = new Matrix4f().translate(handStates.leftPosition);
@@ -1842,13 +1841,11 @@ public class HelloOpenXRVK {
 
                         Matrix4f rightHandMatrix = null;
                         if (handStates.rightPosition != null) {
-                            rightHandMatrix = new Matrix4f();
+                            rightHandMatrix = new Matrix4f().translate(handStates.rightPosition);
 
                             if (handStates.rightRotation != null) {
                                 rightHandMatrix.rotate(handStates.rightRotation);
                             }
-
-                            rightHandMatrix.translate(handStates.rightPosition);
                         }
 
                         for (int swapchainIndex = 0; swapchainIndex < swapchains.length; swapchainIndex++) {
