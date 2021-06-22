@@ -421,62 +421,49 @@ public class HelloOpenXRVK {
             xrCheck(xrGetVulkanInstanceExtensionsKHR(xrInstance, xrSystemId, pCapXrVkInstanceExtensions, pXrVkInstanceExtensions), "GetVulkanInstanceExtensions");
 
             // NOTE: The call to memAddress is important because LWJGL doesn't expect byte buffers to end with the null char
-            String[] xrVkInstanceExtensions = memUTF8(memAddress(pXrVkInstanceExtensions)).split(" ");
-
-            System.out.println(xrVkInstanceExtensions.length + " Vulkan instance extensions are required for OpenXR:");
-            for (String xrVkExtension : xrVkInstanceExtensions) {
-                System.out.println(xrVkExtension);
-            }
-            System.out.println("--------------");
+            String[] requiredInstanceExtensionsArray = memUTF8(memAddress(pXrVkInstanceExtensions)).split(" ");
+            Set<String> requiredInstanceExtensions = new HashSet<>(requiredInstanceExtensionsArray.length);
+            Collections.addAll(requiredInstanceExtensions, requiredInstanceExtensionsArray);
 
             IntBuffer pNumExtensions = stack.callocInt(1);
             vkEnumerateInstanceExtensionProperties((ByteBuffer) null, pNumExtensions, null);
             int numExtensions = pNumExtensions.get(0);
-
             VkExtensionProperties.Buffer pExtensionProps = VkExtensionProperties.callocStack(numExtensions, stack);
             vkCheck(vkEnumerateInstanceExtensionProperties((ByteBuffer) null, pNumExtensions, pExtensionProps), "EnumerateInstanceExtensionProperties");
 
-            boolean hasExtDebugUtils = false;
-            boolean[] hasXrVkInstanceExtensions = new boolean[xrVkInstanceExtensions.length];
-            System.out.println("Available Vulkan instance extensions:");
+            Set<String> availableInstanceExtensions = new HashSet<>(numExtensions);
             for (int index = 0; index < numExtensions; index++) {
-                VkExtensionProperties extensionProp = pExtensionProps.get(index);
-                String extensionName = extensionProp.extensionNameString();
-                System.out.println(extensionName);
-                if (extensionName.equals(VK_EXT_DEBUG_UTILS_EXTENSION_NAME)) {
-                    hasExtDebugUtils = true;
-                }
+                availableInstanceExtensions.add(pExtensionProps.get(index).extensionNameString());
+            }
 
-                // Check if all required Vulkan extensions for OpenXR are present
-                for (int xrExtIndex = 0; xrExtIndex < hasXrVkInstanceExtensions.length; xrExtIndex++) {
-                    if (!hasXrVkInstanceExtensions[xrExtIndex]) {
-                        if (extensionName.equals(xrVkInstanceExtensions[xrExtIndex])) {
-                            hasXrVkInstanceExtensions[xrExtIndex] = true;
-                        }
-                    }
-                }
+            boolean hasExtDebugUtils = availableInstanceExtensions.contains(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            System.out.println("Available Vulkan instance extensions:");
+            for (String extension : availableInstanceExtensions) {
+                System.out.println(extension);
             }
             System.out.println("-----------");
 
-            for (int index = 0; index < hasXrVkInstanceExtensions.length; index++) {
-                if (!hasXrVkInstanceExtensions[index]) {
-                    throw new RuntimeException("Missing required extension " + xrVkInstanceExtensions[index]);
+            Set<String> chosenInstanceExtensions = new HashSet<>(requiredInstanceExtensions.size() + 1);
+            if (hasExtDebugUtils) {
+                chosenInstanceExtensions.add(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            }
+            System.out.println(requiredInstanceExtensions.size() + " Vulkan instance extensions are required for OpenXR:");
+            for (String extension: requiredInstanceExtensions) {
+                if (availableInstanceExtensions.contains(extension)) {
+                    System.out.println(extension);
+                    chosenInstanceExtensions.add(extension);
+                } else {
+                    // This can happen if the OpenXR runtime is being stupid
+                    System.out.println(extension + " [NOT SUPPORTED]");
                 }
             }
+            System.out.println("--------------");
 
-            String[] instanceExtensions;
-            if (hasExtDebugUtils) {
-                System.out.println("Enabling vulkan debugger");
-                instanceExtensions = Arrays.copyOf(xrVkInstanceExtensions, xrVkInstanceExtensions.length + 1);
-                instanceExtensions[instanceExtensions.length - 1] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-            } else {
-                System.out.println("Can't start vulkan debugger because the following extension is missing: " + VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-                instanceExtensions = xrVkInstanceExtensions;
-            }
-
-            PointerBuffer ppExtensionNames = stack.callocPointer(instanceExtensions.length);
-            for (int index = 0; index < instanceExtensions.length; index++) {
-                ppExtensionNames.put(index, stack.UTF8(instanceExtensions[index]));
+            PointerBuffer ppExtensionNames = stack.callocPointer(chosenInstanceExtensions.size());
+            int instanceExtensionIndex = 0;
+            for (String extension : chosenInstanceExtensions) {
+                ppExtensionNames.put(instanceExtensionIndex, stack.UTF8(extension));
+                instanceExtensionIndex++;
             }
             ciInstance.ppEnabledExtensionNames(ppExtensionNames);
 
@@ -534,13 +521,9 @@ public class HelloOpenXRVK {
                 vkDebugMessenger = pDebug.get(0);
             }
 
-            IntBuffer pPhysicalDeviceCount = stack.callocInt(1);
-            vkEnumeratePhysicalDevices(vkInstance, pPhysicalDeviceCount, null);
-            int numPhysicalDevices = pPhysicalDeviceCount.get(0);
-
-            PointerBuffer physicalDevices = stack.callocPointer(numPhysicalDevices);
-            vkCheck(vkEnumeratePhysicalDevices(vkInstance, pPhysicalDeviceCount, physicalDevices), "EnumeratePhysicalDevices");
-            System.out.println("Found " + numPhysicalDevices + " physical devices:");
+            PointerBuffer pPhysicalDeviceHandle = stack.callocPointer(1);
+            xrCheck(xrGetVulkanGraphicsDeviceKHR(xrInstance, xrSystemId, vkInstance, pPhysicalDeviceHandle), "GetVulkanGraphicsDevice");
+            vkPhysicalDevice = new VkPhysicalDevice(pPhysicalDeviceHandle.get(0), vkInstance);
 
             IntBuffer pCapXrDeviceExtensions = stack.callocInt(1);
             xrGetVulkanDeviceExtensionsKHR(xrInstance, xrSystemId, pCapXrDeviceExtensions, null);
@@ -548,23 +531,38 @@ public class HelloOpenXRVK {
 
             xrCheck(xrGetVulkanDeviceExtensionsKHR(xrInstance, xrSystemId, pCapXrDeviceExtensions, pXrDeviceExtensions), "GetVulkanDeviceExtensions");
             // NOTE: The memAddress call is important because LWJGL doesn't expect byte buffers to contain the 0 char
-            String[] xrDeviceExtensions = memUTF8(memAddress(pXrDeviceExtensions)).split(" ");
+            String[] requiredDeviceExtensions = memUTF8(memAddress(pXrDeviceExtensions)).split(" ");
 
-            System.out.println(xrDeviceExtensions.length + " Vulkan device extensions are required for OpenXR:");
-            for (String extension : xrDeviceExtensions) {
-                System.out.println(extension);
+            IntBuffer pNumDeviceExtensions = stack.callocInt(1);
+            vkEnumerateDeviceExtensionProperties(vkPhysicalDevice, (ByteBuffer) null, pNumDeviceExtensions, null);
+            int numDeviceExtensions = pNumDeviceExtensions.get(0);
+            VkExtensionProperties.Buffer pAvailableDeviceExtensions = VkExtensionProperties.callocStack(numDeviceExtensions, stack);
+            vkCheck(vkEnumerateDeviceExtensionProperties(vkPhysicalDevice, (ByteBuffer) null, pNumDeviceExtensions, pAvailableDeviceExtensions), "enumerateDeviceExtensionProperties");
+
+            // Collect the available extensions in a set for easier lookup
+            Set<String> availableDeviceExtensions = new HashSet<>(numDeviceExtensions);
+            for (int index = 0; index < numDeviceExtensions; index++) {
+                availableDeviceExtensions.add(pAvailableDeviceExtensions.get(index).extensionNameString());
+            }
+
+            Set<String> chosenDeviceExtensions = new HashSet<>(requiredDeviceExtensions.length);
+
+            // Enumerate available device extensions
+            System.out.println(requiredDeviceExtensions.length + " Vulkan device extensions are required for OpenXR:");
+            for (String extension : requiredDeviceExtensions) {
+                if (availableDeviceExtensions.contains(extension)) {
+                    System.out.println(extension);
+                    chosenDeviceExtensions.add(extension);
+                } else {
+                    // The SteamVR OpenXR runtime sometimes requires extensions that are not supported...
+                    System.out.println(extension + " [NOT SUPPORTED]");
+                }
             }
             System.out.println("-------------");
 
-            PointerBuffer pPhysicalDeviceHandle = stack.callocPointer(1);
-            // This is a bit of a hack to create a valid physical device handle to be used in the next function
-            vkEnumeratePhysicalDevices(vkInstance, stack.ints(1), pPhysicalDeviceHandle);
-            xrCheck(xrGetVulkanGraphicsDeviceKHR(xrInstance, xrSystemId, vkInstance, pPhysicalDeviceHandle), "GetVulkanGraphicsDevice");
-            vkPhysicalDevice = new VkPhysicalDevice(pPhysicalDeviceHandle.get(0), vkInstance);
-
             VkPhysicalDeviceProperties pPhysicalProperties = VkPhysicalDeviceProperties.callocStack(stack);
             vkGetPhysicalDeviceProperties(vkPhysicalDevice, pPhysicalProperties);
-            System.out.println("Chose " + pPhysicalProperties.deviceNameString());
+            System.out.println("The OpenXR runtime chose physical device " + pPhysicalProperties.deviceNameString());
 
             IntBuffer pQueueFamilyCount = stack.callocInt(1);
             vkGetPhysicalDeviceQueueFamilyProperties(vkPhysicalDevice, pQueueFamilyCount, null);
@@ -600,9 +598,11 @@ public class HelloOpenXRVK {
             VkDeviceCreateInfo ciDevice = VkDeviceCreateInfo.callocStack(stack);
             ciDevice.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
             ciDevice.pQueueCreateInfos(cipDeviceQueue);
-            PointerBuffer ppDeviceExtensions = stack.callocPointer(xrDeviceExtensions.length);
-            for (int index = 0; index < xrDeviceExtensions.length; index++) {
-                ppDeviceExtensions.put(index, stack.UTF8(xrDeviceExtensions[index]));
+            PointerBuffer ppDeviceExtensions = stack.callocPointer(chosenDeviceExtensions.size());
+            int deviceExtensionIndex = 0;
+            for (String extension : chosenDeviceExtensions) {
+                ppDeviceExtensions.put(deviceExtensionIndex, stack.UTF8(extension));
+                deviceExtensionIndex++;
             }
             ciDevice.ppEnabledExtensionNames(ppDeviceExtensions);
 
@@ -2061,6 +2061,7 @@ public class HelloOpenXRVK {
     }
 
     private static void xrCheck(int result, String functionName) {
+        // TODO Use < XR_SUCCESS instead?
         if (result != XR_SUCCESS) {
             String constantName = findConstantMeaning(XR10.class, candidateConstant -> candidateConstant.startsWith("XR_ERROR_"), result);
             throw new RuntimeException("OpenXR function " + functionName + " returned " + result + " (" + constantName + ")");
@@ -2068,6 +2069,7 @@ public class HelloOpenXRVK {
     }
 
     private static void vkCheck(int result, String functionName) {
+        // TODO Use < VK_SUCCESS instead?
         if (result != VK_SUCCESS) {
             String constantName = findConstantMeaning(VK10.class, candidateConstant -> candidateConstant.startsWith("VK_ERROR_"), result);
             throw new RuntimeException("Vulkan function " + functionName + " returned " + result + " (" + constantName + ")");
