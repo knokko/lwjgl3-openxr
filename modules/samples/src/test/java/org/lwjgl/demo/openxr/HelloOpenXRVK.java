@@ -47,7 +47,7 @@ public class HelloOpenXRVK {
         static final int NUM_INDICES = NUM_CUBES * 6 * 6;
     }
 
-    private static final int DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
+    //private static final int DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT;
 
     private static class SwapchainImage {
         final long colorImage;
@@ -171,7 +171,8 @@ public class HelloOpenXRVK {
 
     private SwapchainWrapper[] swapchains;
     private int viewConfiguration;
-    private int swapchainFormat;
+    private int swapchainColorFormat;
+    private int swapchainDepthFormat;
 
     private XrSpace renderSpace;
 
@@ -719,7 +720,7 @@ public class HelloOpenXRVK {
     }
 
     private void createRenderResources() {
-        chooseSwapchainFormat();
+        chooseSwapchainFormats();
         createRenderPass();
         createSwapchains();
         createCommandPools();
@@ -1045,7 +1046,7 @@ public class HelloOpenXRVK {
             VkAttachmentDescription.Buffer attachments = VkAttachmentDescription.callocStack(2, stack);
             VkAttachmentDescription colorAttachment = attachments.get(0);
             colorAttachment.flags(0);
-            colorAttachment.format(this.swapchainFormat);
+            colorAttachment.format(this.swapchainColorFormat);
             // TODO SAMPLES
             colorAttachment.samples(VK_SAMPLE_COUNT_1_BIT);
             colorAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
@@ -1057,7 +1058,7 @@ public class HelloOpenXRVK {
 
             VkAttachmentDescription depthAttachment = attachments.get(1);
             depthAttachment.flags(0);
-            depthAttachment.format(DEPTH_FORMAT);
+            depthAttachment.format(swapchainDepthFormat);
             // TODO SAMPLES
             depthAttachment.samples(VK_SAMPLE_COUNT_1_BIT);
             depthAttachment.loadOp(VK_ATTACHMENT_LOAD_OP_CLEAR);
@@ -1342,7 +1343,7 @@ public class HelloOpenXRVK {
         }
     }
 
-    private void chooseSwapchainFormat() {
+    private void chooseSwapchainFormats() {
         try (MemoryStack stack = stackPush()) {
             IntBuffer pNumFormats = stack.callocInt(1);
             xrCheck(xrEnumerateSwapchainFormats(xrVkSession, pNumFormats, null), "EnumerateSwapchainFormats");
@@ -1353,13 +1354,24 @@ public class HelloOpenXRVK {
 
             // SRGB formats are preferred due to the human perception of colors
             // Non-alpha formats are preferred because I don't intend to use it and it would spare memory
-            int[] preferredFormats = {
+            int[] preferredColorFormats = {
                 VK_FORMAT_R8G8B8_SRGB, VK_FORMAT_B8G8R8_SRGB,
                 VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB,
                 VK_FORMAT_R8G8B8_UNORM, VK_FORMAT_B8G8R8_UNORM,
                 VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM
             };
-            boolean[] hasPreferredFormats = new boolean[preferredFormats.length];
+            boolean[] hasPreferredColorFormats = new boolean[preferredColorFormats.length];
+
+            // NVidia recommends avoiding 32 bits for the depth component because it slows down depth testing.
+            // (For graphics cards, comparisons with 24 bit floating point numbers is easier than with 32.)
+            // We don't use the stencil test, so we prefer a format without one.
+            int[] preferredDepthFormats = {
+                VK_FORMAT_X8_D24_UNORM_PACK32,
+                VK_FORMAT_D24_UNORM_S8_UINT,
+                VK_FORMAT_D32_SFLOAT,
+                VK_FORMAT_D32_SFLOAT_S8_UINT
+            };
+            boolean[] hasPrefferedDepthFormats = new boolean[preferredDepthFormats.length];
 
             System.out.println("There are " + numFormats + " swapchain formats:");
             for (int index = 0; index < numFormats; index++) {
@@ -1370,31 +1382,49 @@ public class HelloOpenXRVK {
                 }
                 System.out.println(formatName + " (" + format + ")");
 
-                for (int prefIndex = 0; prefIndex < preferredFormats.length; prefIndex++) {
-                    if (format == preferredFormats[prefIndex]) {
-                        hasPreferredFormats[prefIndex] = true;
+                for (int prefIndex = 0; prefIndex < preferredColorFormats.length; prefIndex++) {
+                    if (format == preferredColorFormats[prefIndex]) {
+                        hasPreferredColorFormats[prefIndex] = true;
+                    }
+                }
+
+                for (int prefIndex = 0; prefIndex < preferredDepthFormats.length; prefIndex++) {
+                    if (format == preferredDepthFormats[prefIndex]) {
+                        hasPrefferedDepthFormats[prefIndex] = true;
                     }
                 }
             }
             System.out.println("--------------");
 
-            swapchainFormat = -1;
+            swapchainColorFormat = -1;
+            swapchainDepthFormat = -1;
 
-            // Pick the best format available
-            for (int prefIndex = 0; prefIndex < preferredFormats.length; prefIndex++) {
-                if (hasPreferredFormats[prefIndex]) {
-                    swapchainFormat = preferredFormats[prefIndex];
+            // Pick the best formats available
+            for (int prefIndex = 0; prefIndex < preferredColorFormats.length; prefIndex++) {
+                if (hasPreferredColorFormats[prefIndex]) {
+                    swapchainColorFormat = preferredColorFormats[prefIndex];
                     break;
                 }
             }
 
-            if (swapchainFormat == -1) {
-                // Damn... what kind of graphics card/xr runtime is this?
-                // Well... if we can't find any format we like, we will just pick the first one
-                swapchainFormat = (int) formats.get(0);
+            for (int prefIndex = 0; prefIndex < preferredDepthFormats.length; prefIndex++) {
+                if (hasPrefferedDepthFormats[prefIndex]) {
+                    swapchainDepthFormat = preferredDepthFormats[prefIndex];
+                    break;
+                }
             }
 
-            System.out.println("Chose swapchain format " + swapchainFormat);
+            if (swapchainColorFormat == -1) {
+                // Damn... what kind of graphics card/xr runtime is this?
+                // Well... if we can't find any format we like, we will just pick the first one
+                swapchainColorFormat = (int) formats.get(0);
+            }
+            if (swapchainDepthFormat == -1) {
+                // Let's hope it will never come to this...
+                swapchainDepthFormat = (int) formats.get(0);
+            }
+
+            System.out.println("Chose swapchain formats " + swapchainColorFormat + " and " + swapchainDepthFormat);
         }
     }
 
@@ -1447,7 +1477,7 @@ public class HelloOpenXRVK {
                     XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
                     XR_SWAPCHAIN_USAGE_SAMPLED_BIT
                 );
-                ciSwapchain.format(swapchainFormat);
+                ciSwapchain.format(swapchainColorFormat);
                 ciSwapchain.width(viewConfig.recommendedImageRectWidth());
                 ciSwapchain.height(viewConfig.recommendedImageRectHeight());
                 ciSwapchain.sampleCount(viewConfig.recommendedSwapchainSampleCount());
@@ -1482,7 +1512,7 @@ public class HelloOpenXRVK {
                 ciDepthImage.sType(VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO);
                 ciDepthImage.flags(0);
                 ciDepthImage.imageType(VK_IMAGE_TYPE_2D);
-                ciDepthImage.format(DEPTH_FORMAT);
+                ciDepthImage.format(swapchainDepthFormat);
                 ciDepthImage.extent().width(ciSwapchain.width());
                 ciDepthImage.extent().height(ciSwapchain.height());
                 ciDepthImage.extent().depth(1);
@@ -1526,7 +1556,7 @@ public class HelloOpenXRVK {
                 ciDepthImageView.flags(0);
                 ciDepthImageView.image(depthImage);
                 ciDepthImageView.viewType(VK_IMAGE_VIEW_TYPE_2D);
-                ciDepthImageView.format(DEPTH_FORMAT);
+                ciDepthImageView.format(swapchainDepthFormat);
                 ciDepthImageView.components(componentMapping);
                 ciDepthImageView.subresourceRange(depthSubresourceRange);
 
@@ -1559,7 +1589,7 @@ public class HelloOpenXRVK {
                     ciImageView.flags(0);
                     ciImageView.image(colorImage);
                     ciImageView.viewType(VK_IMAGE_VIEW_TYPE_2D);
-                    ciImageView.format(swapchainFormat);
+                    ciImageView.format(swapchainColorFormat);
                     ciImageView.components(componentMapping);
                     ciImageView.subresourceRange(colorSubresourceRange);
 
