@@ -205,7 +205,7 @@ public class HelloOpenXRVK {
 
             boolean hasCoreValidationLayer = false;
             IntBuffer pNumLayers = stack.callocInt(1);
-            xrEnumerateApiLayerProperties(pNumLayers, null);
+            xrCheck(xrEnumerateApiLayerProperties(pNumLayers, null), "EnumerateApiLayerProperties");
             int numLayers = pNumLayers.get(0);
             XrApiLayerProperties.Buffer pLayers = XRHelper.prepareApiLayerProperties(stack, numLayers);
             xrCheck(xrEnumerateApiLayerProperties(pNumLayers, pLayers), "EnumerateApiLayerProperties");
@@ -220,11 +220,11 @@ public class HelloOpenXRVK {
             System.out.println("-----------");
 
             IntBuffer pNumExtensions = stack.mallocInt(1);
-            XR10.xrEnumerateInstanceExtensionProperties((ByteBuffer)null, pNumExtensions, null);
+            xrCheck(xrEnumerateInstanceExtensionProperties((ByteBuffer)null, pNumExtensions, null), "EnumerateInstanceExtensionProperties");
             int numExtensions = pNumExtensions.get(0);
 
             XrExtensionProperties.Buffer properties = XRHelper.prepareExtensionProperties(stack, numExtensions);
-            xrCheck(XR10.xrEnumerateInstanceExtensionProperties((ByteBuffer)null, pNumExtensions, properties), "EnumerateInstanceExtensionProperties");
+            xrCheck(xrEnumerateInstanceExtensionProperties((ByteBuffer)null, pNumExtensions, properties), "EnumerateInstanceExtensionProperties");
 
             System.out.printf("OpenXR loaded with %d extensions:%n", numExtensions);
             System.out.println("~~~~~~~~~~~~~~~~~~");
@@ -285,7 +285,7 @@ public class HelloOpenXRVK {
 
             PointerBuffer instancePtr = stack.mallocPointer(1);
             System.out.println("Create instance...");
-            xrCheck(XR10.xrCreateInstance(createInfo, instancePtr), "CreateInstance");
+            xrCheck(xrCreateInstance(createInfo, instancePtr), "CreateInstance");
             xrInstance = new XrInstance(instancePtr.get(0), createInfo);
             System.out.println("Created instance");
         }
@@ -415,7 +415,7 @@ public class HelloOpenXRVK {
             ciInstance.pApplicationInfo(appInfo);
 
             IntBuffer pCapXrVkInstanceExtensions = stack.callocInt(1);
-            xrGetVulkanInstanceExtensionsKHR(xrInstance, xrSystemId, pCapXrVkInstanceExtensions, null);
+            xrCheck(xrGetVulkanInstanceExtensionsKHR(xrInstance, xrSystemId, pCapXrVkInstanceExtensions, null), "GetVulkanInstanceExtensions");
 
             ByteBuffer pXrVkInstanceExtensions = stack.calloc(pCapXrVkInstanceExtensions.get(0));
             xrCheck(xrGetVulkanInstanceExtensionsKHR(xrInstance, xrSystemId, pCapXrVkInstanceExtensions, pXrVkInstanceExtensions), "GetVulkanInstanceExtensions");
@@ -426,7 +426,7 @@ public class HelloOpenXRVK {
             Collections.addAll(requiredInstanceExtensions, requiredInstanceExtensionsArray);
 
             IntBuffer pNumExtensions = stack.callocInt(1);
-            vkEnumerateInstanceExtensionProperties((ByteBuffer) null, pNumExtensions, null);
+            vkCheck(vkEnumerateInstanceExtensionProperties((ByteBuffer) null, pNumExtensions, null), "EnumerateInstanceExtensionProperties");
             int numExtensions = pNumExtensions.get(0);
             VkExtensionProperties.Buffer pExtensionProps = VkExtensionProperties.callocStack(numExtensions, stack);
             vkCheck(vkEnumerateInstanceExtensionProperties((ByteBuffer) null, pNumExtensions, pExtensionProps), "EnumerateInstanceExtensionProperties");
@@ -468,7 +468,7 @@ public class HelloOpenXRVK {
             ciInstance.ppEnabledExtensionNames(ppExtensionNames);
 
             IntBuffer pPropertyCount = stack.callocInt(1);
-            vkEnumerateInstanceLayerProperties(pPropertyCount, null);
+            vkCheck(vkEnumerateInstanceLayerProperties(pPropertyCount, null), "EnumerateInstanceLayerProperties");
             int propertyCount = pPropertyCount.get(0);
 
             VkLayerProperties.Buffer layerProps = VkLayerProperties.callocStack(propertyCount, stack);
@@ -526,7 +526,7 @@ public class HelloOpenXRVK {
             vkPhysicalDevice = new VkPhysicalDevice(pPhysicalDeviceHandle.get(0), vkInstance);
 
             IntBuffer pCapXrDeviceExtensions = stack.callocInt(1);
-            xrGetVulkanDeviceExtensionsKHR(xrInstance, xrSystemId, pCapXrDeviceExtensions, null);
+            xrCheck(xrGetVulkanDeviceExtensionsKHR(xrInstance, xrSystemId, pCapXrDeviceExtensions, null), "GetVulkanDeviceExtensions");
             ByteBuffer pXrDeviceExtensions = stack.calloc(pCapXrDeviceExtensions.get(0));
 
             xrCheck(xrGetVulkanDeviceExtensionsKHR(xrInstance, xrSystemId, pCapXrDeviceExtensions, pXrDeviceExtensions), "GetVulkanDeviceExtensions");
@@ -534,7 +534,7 @@ public class HelloOpenXRVK {
             String[] requiredDeviceExtensions = memUTF8(memAddress(pXrDeviceExtensions)).split(" ");
 
             IntBuffer pNumDeviceExtensions = stack.callocInt(1);
-            vkEnumerateDeviceExtensionProperties(vkPhysicalDevice, (ByteBuffer) null, pNumDeviceExtensions, null);
+            vkCheck(vkEnumerateDeviceExtensionProperties(vkPhysicalDevice, (ByteBuffer) null, pNumDeviceExtensions, null), "EnumerateDeviceExtensionProperties");
             int numDeviceExtensions = pNumDeviceExtensions.get(0);
             VkExtensionProperties.Buffer pAvailableDeviceExtensions = VkExtensionProperties.callocStack(numDeviceExtensions, stack);
             vkCheck(vkEnumerateDeviceExtensionProperties(vkPhysicalDevice, (ByteBuffer) null, pNumDeviceExtensions, pAvailableDeviceExtensions), "enumerateDeviceExtensionProperties");
@@ -1402,7 +1402,7 @@ public class HelloOpenXRVK {
         try (MemoryStack stack = stackPush()) {
 
             IntBuffer pNumViewConfigurations = stack.callocInt(1);
-            xrEnumerateViewConfigurations(xrInstance, xrSystemId, pNumViewConfigurations, null);
+            xrCheck(xrEnumerateViewConfigurations(xrInstance, xrSystemId, pNumViewConfigurations, null), "EnumerateViewConfigurations");
             int numViewConfigurations = pNumViewConfigurations.get(0);
             System.out.println("There are " + numViewConfigurations + " view configurations:");
             IntBuffer viewConfigurations = stack.callocInt(numViewConfigurations);
@@ -1427,7 +1427,7 @@ public class HelloOpenXRVK {
             System.out.println("Chose " + viewConfiguration);
 
             IntBuffer pNumViews = stack.callocInt(1);
-            xrEnumerateViewConfigurationViews(xrInstance, xrSystemId, viewConfiguration, pNumViews, null);
+            xrCheck(xrEnumerateViewConfigurationViews(xrInstance, xrSystemId, viewConfiguration, pNumViews, null), "EnumerateViewConfigurationViews");
             int numViews = pNumViews.get(0);
             System.out.println("There are " + numViews + " views");
             XrViewConfigurationView.Buffer viewConfigurationViews = XrViewConfigurationView.callocStack(numViews, stack);
@@ -1465,7 +1465,7 @@ public class HelloOpenXRVK {
 
 
                 IntBuffer pNumImages = stack.callocInt(1);
-                xrEnumerateSwapchainImages(swapchain, pNumImages, null);
+                xrCheck(xrEnumerateSwapchainImages(swapchain, pNumImages, null), "EnumerateSwapchainImages");
 
                 int numImages = pNumImages.get(0);
                 System.out.println("Swapchain " + swapchainIndex + " has " + numImages + " images");
@@ -1609,10 +1609,7 @@ public class HelloOpenXRVK {
             views.get(viewIndex).type(XR_TYPE_VIEW);
         }
 
-        int locateViewResult = xrLocateViews(xrVkSession, viewLocateInfo, viewState, pNumViews, views);
-        if (locateViewResult != XR_SESSION_LOSS_PENDING) {
-            xrCheck(locateViewResult, "LocateViews");
-        }
+        xrCheck(xrLocateViews(xrVkSession, viewLocateInfo, viewState, pNumViews, views), "LocateViews");
 
         long viewFlags = viewState.viewStateFlags();
         if ((viewFlags & XR_VIEW_STATE_POSITION_VALID_BIT) == 0) {
@@ -1659,9 +1656,8 @@ public class HelloOpenXRVK {
             pollEventData.next(NULL);
 
             int pollResult = xrPollEvent(xrInstance, pollEventData);
+            xrCheck(pollResult, "PollEvent");
             if (pollResult != XR_EVENT_UNAVAILABLE) {
-                xrCheck(pollResult, "PollEvent");
-
                 if (pollEventData.type() == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
                     XrEventDataSessionStateChanged sessionEvent = XrEventDataSessionStateChanged.create(pollEventData.address());
                     xrSessionState = sessionEvent.state();
@@ -1761,10 +1757,7 @@ public class HelloOpenXRVK {
 
                 boolean timeoutStop = endTime != 0 && System.currentTimeMillis() > endTime;
                 if (timeoutStop && startedSession) {
-                    int exitResult = xrRequestExitSession(xrVkSession);
-                    if (exitResult != XR_SESSION_LOSS_PENDING) {
-                        xrCheck(exitResult, "RequestExitSession");
-                    }
+                    xrCheck(xrRequestExitSession(xrVkSession), "RequestExitSession");
                     startedSession = false;
                 }
 
@@ -1800,17 +1793,9 @@ public class HelloOpenXRVK {
                 ) {
                     XrFrameState frameState = XrFrameState.callocStack(stack);
                     frameState.type(XR_TYPE_FRAME_STATE);
-                    int waitResult = xrWaitFrame(xrVkSession, null, frameState);
+                    xrCheck(xrWaitFrame(xrVkSession, null, frameState), "WaitFrame");
 
-                    // SESSION_LOSS_PENDING is also a valid result, but we will ignore it
-                    if (waitResult != XR_SESSION_LOSS_PENDING) {
-                        xrCheck(waitResult, "WaitFrame");
-                    }
-
-                    int beginResult = xrBeginFrame(xrVkSession, null);
-                    if (beginResult != XR_SESSION_LOSS_PENDING) {
-                        xrCheck(beginResult, "BeginFrame");
-                    }
+                    xrCheck(xrBeginFrame(xrVkSession, null), "BeginFrame");
 
                     PointerBuffer layers = null;
                     if (frameState.shouldRender()) {
@@ -1851,10 +1836,7 @@ public class HelloOpenXRVK {
                         for (int swapchainIndex = 0; swapchainIndex < swapchains.length; swapchainIndex++) {
                             SwapchainWrapper swapchain = this.swapchains[swapchainIndex];
                             IntBuffer pImageIndex = stack.callocInt(1);
-                            int acquireResult = xrAcquireSwapchainImage(swapchain.swapchain, null, pImageIndex);
-                            if (acquireResult != XR_SESSION_LOSS_PENDING) {
-                                xrCheck(acquireResult, "AcquireSwapchainImage");
-                            }
+                            xrCheck(xrAcquireSwapchainImage(swapchain.swapchain, null, pImageIndex), "AcquireSwapchainImage");
 
                             Matrix4f cameraMatrix;
                             if (projectionViews != null) {
@@ -1888,10 +1870,7 @@ public class HelloOpenXRVK {
                             // Time out after 1 second. If we would have to wait so long, something is seriously wrong
                             wiSwapchainImage.timeout(1_000_000_000);
 
-                            int waitImageResult = xrWaitSwapchainImage(swapchain.swapchain, wiSwapchainImage);
-                            if (waitImageResult != XR_SESSION_LOSS_PENDING) {
-                                xrCheck(waitImageResult, "WaitSwapchainImage");
-                            }
+                            xrCheck(xrWaitSwapchainImage(swapchain.swapchain, wiSwapchainImage), "WaitSwapchainImage");
 
                             // For now, we will simply create and destroy command buffers every frame
                             VkCommandBufferAllocateInfo aiCommandBuffer = VkCommandBufferAllocateInfo.callocStack(stack);
@@ -1983,10 +1962,7 @@ public class HelloOpenXRVK {
                             vkFreeCommandBuffers(vkDevice, this.vkCommandPool, commandBuffer);
                             vkDestroyFence(vkDevice, fence, null);
 
-                            int releaseResult = xrReleaseSwapchainImage(swapchain.swapchain, null);
-                            if (releaseResult != XR_SESSION_LOSS_PENDING) {
-                                xrCheck(releaseResult, "ReleaseSwapchainImage");
-                            }
+                            xrCheck(xrReleaseSwapchainImage(swapchain.swapchain, null), "ReleaseSwapchainImage");
                         }
                     } else {
                         System.out.println("Skip frame");
@@ -1998,10 +1974,7 @@ public class HelloOpenXRVK {
                     eiFrame.environmentBlendMode(XR_ENVIRONMENT_BLEND_MODE_OPAQUE);
                     eiFrame.layers(layers);
 
-                    int endResult = xrEndFrame(xrVkSession, eiFrame);
-                    if (endResult != XR_SESSION_LOSS_PENDING) {
-                        xrCheck(endResult, "EndFrame");
-                    }
+                    xrCheck(xrEndFrame(xrVkSession, eiFrame), "EndFrame");
                 }
             }
         }
@@ -2061,16 +2034,14 @@ public class HelloOpenXRVK {
     }
 
     private static void xrCheck(int result, String functionName) {
-        // TODO Use < XR_SUCCESS instead?
-        if (result != XR_SUCCESS) {
+        if (result < XR_SUCCESS) {
             String constantName = findConstantMeaning(XR10.class, candidateConstant -> candidateConstant.startsWith("XR_ERROR_"), result);
             throw new RuntimeException("OpenXR function " + functionName + " returned " + result + " (" + constantName + ")");
         }
     }
 
     private static void vkCheck(int result, String functionName) {
-        // TODO Use < VK_SUCCESS instead?
-        if (result != VK_SUCCESS) {
+        if (result < VK_SUCCESS) {
             String constantName = findConstantMeaning(VK10.class, candidateConstant -> candidateConstant.startsWith("VK_ERROR_"), result);
             throw new RuntimeException("Vulkan function " + functionName + " returned " + result + " (" + constantName + ")");
         }
