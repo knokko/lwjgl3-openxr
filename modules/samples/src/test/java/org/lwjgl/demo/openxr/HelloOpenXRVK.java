@@ -69,10 +69,13 @@ public class HelloOpenXRVK {
         final long depthImageView;
         final long depthImageMemory;
         final SwapchainImage[] images;
+        final long fence;
+        final VkCommandBuffer commandBuffer;
 
         SwapchainWrapper(
             XrSwapchain swapchain, int width, int height, int numSamples,
-            long depthImage, long depthImageView, long depthImageMemory, SwapchainImage[] images
+            long depthImage, long depthImageView, long depthImageMemory, SwapchainImage[] images,
+            long fence, VkCommandBuffer commandBuffer
         ) {
             if (swapchain == null) throw new NullPointerException("swapchain");
             this.swapchain = swapchain;
@@ -102,6 +105,12 @@ public class HelloOpenXRVK {
             this.depthImageView = depthImageView;
             if (depthImageMemory == 0) throw new IllegalArgumentException("The depth image memory is 0");
             this.depthImageMemory = depthImageMemory;
+
+            if (fence == 0) throw new IllegalArgumentException("Fence is 0");
+            this.fence = fence;
+
+            if (commandBuffer == null) throw new NullPointerException("commandBuffer");
+            this.commandBuffer = commandBuffer;
         }
     }
 
@@ -161,7 +170,8 @@ public class HelloOpenXRVK {
     private VkQueue vkQueue;
     private int vkQueueFamilyIndex;
     private int vkQueueIndex;
-    private long vkCommandPool;
+    private long vkCommandPoolCopying;
+    private long vkCommandPoolDrawing;
     private long vkRenderPass;
     private long vkPipelineLayout;
     private long[] vkGraphicsPipelines;
@@ -195,7 +205,7 @@ public class HelloOpenXRVK {
         }
 
         // Always clean up
-        destroyRenderResources();
+        destroySwapchains();
         destroyXrVkSession();
         destroyVk();
         destroyXrInstance();
@@ -636,8 +646,11 @@ public class HelloOpenXRVK {
             }
         }
 
-        if (vkCommandPool != 0) {
-            vkDestroyCommandPool(vkDevice, vkCommandPool, null);
+        if (vkCommandPoolCopying != 0) {
+            vkDestroyCommandPool(vkDevice, vkCommandPoolCopying, null);
+        }
+        if (vkCommandPoolDrawing != 0) {
+            vkDestroyCommandPool(vkDevice, vkCommandPoolDrawing, null);
         }
 
         if (vkBigBuffer != 0) {
@@ -722,8 +735,8 @@ public class HelloOpenXRVK {
     private void createRenderResources() {
         chooseSwapchainFormats();
         createRenderPass();
-        createSwapchains();
         createCommandPools();
+        createSwapchains();
         createGraphicsPipelines();
         createRenderSpace();
         createBuffers();
@@ -782,32 +795,32 @@ public class HelloOpenXRVK {
     private static final CubePlane[] CUBE_PLANES = {
         // Bottom
         new CubePlane(
-            0, -1, 0, 1, 0, -1,
+            0, -1, 0, 1, 0, 1,
             0, 2, 1, 0
         ),
         // Top
         new CubePlane(
-            0, 1, 0, 1, 0, 1,
+            0, 1, 0, 1, 0, -1,
             0, 2, 1, 1
         ),
         // Left
         new CubePlane(
-            -1, 0, 0, 0, 1, -1,
+            -1, 0, 0, 0, 1, 1,
             2, 1, 0, 2
         ),
         // Right
         new CubePlane(
-            1, 0, 0, 0, 1, 1,
+            1, 0, 0, 0, 1, -1,
             2, 1, 0, 3
         ),
         // Front
         new CubePlane(
-            0, 0, -1, 1, 1, 0,
+            0, 0, -1, -1, 1, 0,
             0, 1, 2, 4
         ),
         // Back
         new CubePlane(
-            0, 0, 1, -1, 1, 0,
+            0, 0, 1, 1, 1, 0,
             0, 1, 2, 5
         )
     };
@@ -960,7 +973,7 @@ public class HelloOpenXRVK {
 
             VkCommandBufferAllocateInfo aiCommandBuffer = VkCommandBufferAllocateInfo.callocStack(stack);
             aiCommandBuffer.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
-            aiCommandBuffer.commandPool(vkCommandPool);
+            aiCommandBuffer.commandPool(vkCommandPoolCopying);
             aiCommandBuffer.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
             aiCommandBuffer.commandBufferCount(1);
 
@@ -1005,7 +1018,7 @@ public class HelloOpenXRVK {
 
             vkFreeMemory(vkDevice, sharedMemory, null);
             vkDestroyBuffer(vkDevice, sharedBuffer, null);
-            vkFreeCommandBuffers(vkDevice, vkCommandPool, copyCommandBuffer);
+            vkFreeCommandBuffers(vkDevice, vkCommandPoolCopying, copyCommandBuffer);
             vkDestroyFence(vkDevice, fence, null);
         }
     }
@@ -1231,9 +1244,7 @@ public class HelloOpenXRVK {
             ciRasterizationState.rasterizerDiscardEnable(false);
             ciRasterizationState.polygonMode(VK_POLYGON_MODE_FILL);
             ciRasterizationState.lineWidth(1f);
-            // In real applications, you would normally use culling. But, it is not so great for debugging.
-            // For instance, it could be the reason why you don't see anything if you messed up the winding order.
-            ciRasterizationState.cullMode(VK_CULL_MODE_NONE);
+            ciRasterizationState.cullMode(VK_CULL_MODE_BACK_BIT);
             ciRasterizationState.frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
             ciRasterizationState.depthBiasEnable(false);
 
@@ -1330,16 +1341,24 @@ public class HelloOpenXRVK {
     private void createCommandPools() {
         try (MemoryStack stack = stackPush()) {
 
-            VkCommandPoolCreateInfo ciCommandPool = VkCommandPoolCreateInfo.callocStack(stack);
-            ciCommandPool.sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
-            // In this tutorial, we will create and destroy the command buffers every frame
-            ciCommandPool.flags(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT);
-            ciCommandPool.queueFamilyIndex(vkQueueFamilyIndex);
+            // The copy command pool is for 1-time-use copy commands
+            VkCommandPoolCreateInfo ciCommandPoolCopy = VkCommandPoolCreateInfo.callocStack(stack);
+            ciCommandPoolCopy.sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+            ciCommandPoolCopy.flags(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT);
+            ciCommandPoolCopy.queueFamilyIndex(vkQueueFamilyIndex);
 
             LongBuffer pCommandPool = stack.callocLong(1);
-            vkCheck(vkCreateCommandPool(vkDevice, ciCommandPool, null, pCommandPool), "CreateCommandPool");
+            vkCheck(vkCreateCommandPool(vkDevice, ciCommandPoolCopy, null, pCommandPool), "CreateCommandPool");
+            this.vkCommandPoolCopying = pCommandPool.get(0);
 
-            this.vkCommandPool = pCommandPool.get(0);
+            // The drawing command buffers will be allocated once and recorded many times
+            VkCommandPoolCreateInfo ciCommandPoolDrawing = VkCommandPoolCreateInfo.callocStack(stack);
+            ciCommandPoolDrawing.sType(VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO);
+            ciCommandPoolDrawing.flags(VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+            ciCommandPoolDrawing.queueFamilyIndex(vkQueueFamilyIndex);
+
+            vkCheck(vkCreateCommandPool(vkDevice, ciCommandPoolDrawing, null, pCommandPool), "CreateCommandPool");
+            this.vkCommandPoolDrawing = pCommandPool.get(0);
         }
     }
 
@@ -1465,6 +1484,19 @@ public class HelloOpenXRVK {
                 viewConfigurationViews.get(viewIndex).type(XR_TYPE_VIEW_CONFIGURATION_VIEW);
             }
             xrCheck(xrEnumerateViewConfigurationViews(xrInstance, xrSystemId, viewConfiguration, pNumViews, viewConfigurationViews), "EnumerateViewConfigurationViews");
+
+            VkFenceCreateInfo ciFence = VkFenceCreateInfo.callocStack(stack);
+            ciFence.sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+            ciFence.flags(0);
+
+            VkCommandBufferAllocateInfo aiCommandBuffer = VkCommandBufferAllocateInfo.callocStack(stack);
+            aiCommandBuffer.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
+            aiCommandBuffer.commandPool(vkCommandPoolDrawing);
+            aiCommandBuffer.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
+            aiCommandBuffer.commandBufferCount(numViews);
+
+            PointerBuffer pCommandBuffers = stack.callocPointer(2);
+            vkCheck(vkAllocateCommandBuffers(vkDevice, aiCommandBuffer, pCommandBuffers), "AllocateCommandBuffers");
 
             this.swapchains = new SwapchainWrapper[numViews];
             for (int swapchainIndex = 0; swapchainIndex < numViews; swapchainIndex++) {
@@ -1613,10 +1645,14 @@ public class HelloOpenXRVK {
                     swapchainImages[imageIndex] = new SwapchainImage(colorImage, colorImageView, framebuffer);
                 }
 
+                LongBuffer pFence = stack.callocLong(1);
+                vkCheck(vkCreateFence(vkDevice, ciFence, null, pFence), "CreateFence");
+
                 this.swapchains[swapchainIndex] = new SwapchainWrapper(
                     new XrSwapchain(pSwapchain.get(0), xrVkSession),
                     ciSwapchain.width(), ciSwapchain.height(), ciSwapchain.sampleCount(),
-                    depthImage, depthImageView, depthImageMemory, swapchainImages
+                    depthImage, depthImageView, depthImageMemory, swapchainImages,
+                    pFence.get(0), new VkCommandBuffer(pCommandBuffers.get(swapchainIndex), vkDevice)
                 );
             }
         }
@@ -1902,23 +1938,11 @@ public class HelloOpenXRVK {
 
                             xrCheck(xrWaitSwapchainImage(swapchain.swapchain, wiSwapchainImage), "WaitSwapchainImage");
 
-                            // For now, we will simply create and destroy command buffers every frame
-                            VkCommandBufferAllocateInfo aiCommandBuffer = VkCommandBufferAllocateInfo.callocStack(stack);
-                            aiCommandBuffer.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO);
-                            aiCommandBuffer.commandPool(vkCommandPool);
-                            aiCommandBuffer.commandBufferCount(1);
-                            aiCommandBuffer.level(VK_COMMAND_BUFFER_LEVEL_PRIMARY);
-
-                            PointerBuffer pCommandBuffer = stack.callocPointer(1);
-                            vkCheck(vkAllocateCommandBuffers(vkDevice, aiCommandBuffer, pCommandBuffer), "AllocateCommandBuffers");
-
-                            VkCommandBuffer commandBuffer = new VkCommandBuffer(pCommandBuffer.get(0), vkDevice);
-
                             VkCommandBufferBeginInfo biCommandBuffer = VkCommandBufferBeginInfo.callocStack(stack);
                             biCommandBuffer.sType(VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO);
                             biCommandBuffer.flags(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
-                            vkCheck(vkBeginCommandBuffer(commandBuffer, biCommandBuffer), "BeginCommandBuffer");
+                            vkCheck(vkBeginCommandBuffer(swapchain.commandBuffer, biCommandBuffer), "BeginCommandBuffer");
 
                             VkClearColorValue clearColorValue = VkClearColorValue.callocStack(stack);
                             clearColorValue.float32(0, 0.1f);
@@ -1948,50 +1972,44 @@ public class HelloOpenXRVK {
                             cameraMatrix.get(pushConstants);
 
                             int stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-                            vkCmdBeginRenderPass(commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
-                            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkGraphicsPipelines[swapchainIndex]);
-                            vkCmdPushConstants(commandBuffer, vkPipelineLayout, stageFlags, 0, pushConstants);
-                            vkCmdBindVertexBuffers(commandBuffer, 0, stack.longs(vkBigBuffer), stack.longs(0));
-                            vkCmdBindIndexBuffer(commandBuffer, vkBigBuffer, VERTEX_SIZE * (BigModel.NUM_VERTICES + 4 * 6), INDEX_TYPE);
+                            vkCmdBeginRenderPass(swapchain.commandBuffer, biRenderPass, VK_SUBPASS_CONTENTS_INLINE);
+                            vkCmdBindPipeline(swapchain.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, vkGraphicsPipelines[swapchainIndex]);
+                            vkCmdPushConstants(swapchain.commandBuffer, vkPipelineLayout, stageFlags, 0, pushConstants);
+                            vkCmdBindVertexBuffers(swapchain.commandBuffer, 0, stack.longs(vkBigBuffer), stack.longs(0));
+                            vkCmdBindIndexBuffer(swapchain.commandBuffer, vkBigBuffer, VERTEX_SIZE * (BigModel.NUM_VERTICES + 4 * 6), INDEX_TYPE);
 
                             // Draw big model
-                            vkCmdDrawIndexed(commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
+                            vkCmdDrawIndexed(swapchain.commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
 
                             // Draw (small) hand models if hand locations are known
                             // TODO Invert the colors if the corresponding hand trigger is pressed
                             if (leftHandMatrix != null) {
                                 cameraMatrix.mul(leftHandMatrix, new Matrix4f()).get(pushConstants);
-                                vkCmdPushConstants(commandBuffer, vkPipelineLayout, stageFlags, 0, pushConstants);
-                                vkCmdDrawIndexed(commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
+                                vkCmdPushConstants(swapchain.commandBuffer, vkPipelineLayout, stageFlags, 0, pushConstants);
+                                vkCmdDrawIndexed(swapchain.commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
                             }
 
                             if (rightHandMatrix != null) {
                                 cameraMatrix.mul(rightHandMatrix, new Matrix4f()).get(pushConstants);
-                                vkCmdPushConstants(commandBuffer, vkPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, pushConstants);
-                                vkCmdDrawIndexed(commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
+                                vkCmdPushConstants(swapchain.commandBuffer, vkPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, pushConstants);
+                                vkCmdDrawIndexed(swapchain.commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
                             }
 
-                            vkCmdEndRenderPass(commandBuffer);
+                            vkCmdEndRenderPass(swapchain.commandBuffer);
 
-                            vkCheck(vkEndCommandBuffer(commandBuffer), "EndCommandBuffer");
+                            vkCheck(vkEndCommandBuffer(swapchain.commandBuffer), "EndCommandBuffer");
 
                             VkSubmitInfo submitInfo = VkSubmitInfo.callocStack(stack);
                             submitInfo.sType(VK_STRUCTURE_TYPE_SUBMIT_INFO);
-                            submitInfo.pCommandBuffers(stack.pointers(commandBuffer.address()));
+                            submitInfo.pCommandBuffers(stack.pointers(swapchain.commandBuffer.address()));
 
-                            VkFenceCreateInfo ciFence = VkFenceCreateInfo.callocStack(stack);
-                            ciFence.sType(VK_STRUCTURE_TYPE_FENCE_CREATE_INFO);
+                            vkCheck(vkQueueSubmit(vkQueue, submitInfo, swapchain.fence), "QueueSubmit");
+                        }
 
-                            // Not the most efficient way of doing things, but should be sufficient for an example
-                            LongBuffer pFence = stack.callocLong(1);
-                            vkCheck(vkCreateFence(vkDevice, ciFence, null, pFence), "CreateFence");
-                            long fence = pFence.get(0);
-
-                            vkCheck(vkQueueSubmit(vkQueue, submitInfo, fence), "QueueSubmit");
-                            vkCheck(vkWaitForFences(vkDevice, pFence, true, 1_000_000_000), "WaitForFences");
-                            vkFreeCommandBuffers(vkDevice, this.vkCommandPool, commandBuffer);
-                            vkDestroyFence(vkDevice, fence, null);
-
+                        // Submit command buffers for both eyes before waiting for them to complete
+                        for (SwapchainWrapper swapchain : swapchains) {
+                            vkCheck(vkWaitForFences(vkDevice, swapchain.fence, true, 1_000_000_000), "WaitForFences");
+                            vkCheck(vkResetFences(vkDevice, swapchain.fence), "ResetFences");
                             xrCheck(xrReleaseSwapchainImage(swapchain.swapchain, null), "ReleaseSwapchainImage");
                         }
                     } else {
@@ -2010,13 +2028,13 @@ public class HelloOpenXRVK {
         }
     }
 
-    private void destroyRenderResources() {
-
-        // TODO Ensure that all rendering is finished
-
+    private void destroySwapchains() {
         if (swapchains != null) {
             for (SwapchainWrapper swapchain : swapchains) {
                 if (swapchain != null) {
+
+                    // In case we crashed during rendering, let's at least make sure that it is finished
+                    vkWaitForFences(vkDevice, swapchain.fence, true, 100_000_000);
                     xrDestroySwapchain(swapchain.swapchain);
 
                     for (SwapchainImage swapchainImage : swapchain.images) {
@@ -2028,6 +2046,8 @@ public class HelloOpenXRVK {
                     vkDestroyImageView(vkDevice, swapchain.depthImageView, null);
                     vkDestroyImage(vkDevice, swapchain.depthImage, null);
                     vkFreeMemory(vkDevice, swapchain.depthImageMemory, null);
+                    vkDestroyFence(vkDevice, swapchain.fence, null);
+                    vkFreeCommandBuffers(vkDevice, vkCommandPoolDrawing, swapchain.commandBuffer);
                 }
             }
         }
