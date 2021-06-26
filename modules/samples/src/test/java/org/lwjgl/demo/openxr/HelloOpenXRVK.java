@@ -158,7 +158,10 @@ public class HelloOpenXRVK {
     private XrSession xrVkSession;
     private int xrSessionState;
     private XrActionSet xrActionSet;
-    private XrAction xrHandAction;
+    private XrAction xrHandPoseAction;
+    private XrAction xrHandClickAction;
+    private long xrPathLeftHand;
+    private long xrPathRightHand;
     private XrSpace xrLeftHandSpace;
     private XrSpace xrRightHandSpace;
     private boolean missingXrDebug;
@@ -334,21 +337,30 @@ public class HelloOpenXRVK {
             LongBuffer pRightHandPath = stack.callocLong(1);
             xrCheck(xrStringToPath(xrInstance, stack.UTF8("/user/hand/left"), pLeftHandPath), "StringToPath");
             xrCheck(xrStringToPath(xrInstance, stack.UTF8("/user/hand/right"), pRightHandPath), "StringToPath");
-            long leftHandPath = pLeftHandPath.get(0);
-            long rightHandPath = pRightHandPath.get(0);
+            this.xrPathLeftHand = pLeftHandPath.get(0);
+            this.xrPathRightHand = pRightHandPath.get(0);
 
-            XrActionCreateInfo ciActionHands = XrActionCreateInfo.callocStack(stack);
-            ciActionHands.type(XR_TYPE_ACTION_CREATE_INFO);
-            ciActionHands.actionType(XR_ACTION_TYPE_POSE_INPUT);
-            ciActionHands.actionName(stack.UTF8("handpose"));
-            ciActionHands.localizedActionName(stack.UTF8("Hand pose"));
-            ciActionHands.subactionPaths(stack.longs(leftHandPath, rightHandPath));
+            XrActionCreateInfo ciActionHandPoses = XrActionCreateInfo.callocStack(stack);
+            ciActionHandPoses.type(XR_TYPE_ACTION_CREATE_INFO);
+            ciActionHandPoses.actionType(XR_ACTION_TYPE_POSE_INPUT);
+            ciActionHandPoses.actionName(stack.UTF8("handpose"));
+            ciActionHandPoses.localizedActionName(stack.UTF8("Hand pose"));
+            ciActionHandPoses.subactionPaths(stack.longs(xrPathLeftHand, xrPathRightHand));
 
-            PointerBuffer pActionHands = stack.callocPointer(1);
-            xrCheck(xrCreateAction(xrActionSet, ciActionHands, pActionHands), "CreateAction");
-            this.xrHandAction = new XrAction(pActionHands.get(0), xrVkSession);
+            PointerBuffer pActionHandPoses = stack.callocPointer(1);
+            xrCheck(xrCreateAction(xrActionSet, ciActionHandPoses, pActionHandPoses), "CreateAction");
+            this.xrHandPoseAction = new XrAction(pActionHandPoses.get(0), xrVkSession);
 
-            // TODO Also create a handTrigger action
+            XrActionCreateInfo ciActionHandClicks = XrActionCreateInfo.callocStack(stack);
+            ciActionHandClicks.type(XR_TYPE_ACTION_CREATE_INFO);
+            ciActionHandClicks.actionType(XR_ACTION_TYPE_BOOLEAN_INPUT);
+            ciActionHandClicks.actionName(stack.UTF8("invert_colors"));
+            ciActionHandClicks.localizedActionName(stack.UTF8("Invert colors"));
+            ciActionHandClicks.subactionPaths(stack.longs(xrPathLeftHand, xrPathRightHand));
+
+            PointerBuffer pActionHandClicks = stack.callocPointer(1);
+            xrCheck(xrCreateAction(xrActionSet, ciActionHandClicks, pActionHandClicks), "CreateAction");
+            this.xrHandClickAction = new XrAction(pActionHandClicks.get(0), xrVkSession);
 
             LongBuffer pInteractionProfile = stack.callocLong(1);
             xrCheck(xrStringToPath(xrInstance, stack.UTF8("/interaction_profiles/khr/simple_controller"), pInteractionProfile), "StringToPath");
@@ -356,16 +368,26 @@ public class HelloOpenXRVK {
 
             LongBuffer pPathLeftHandPose = stack.callocLong(1);
             LongBuffer pPathRightHandPose = stack.callocLong(1);
+            LongBuffer pPathLeftHandClick = stack.callocLong(1);
+            LongBuffer pPathRightHandClick = stack.callocLong(1);
             xrCheck(xrStringToPath(xrInstance, stack.UTF8("/user/hand/left/input/grip/pose"), pPathLeftHandPose), "StringToPath");
             xrCheck(xrStringToPath(xrInstance, stack.UTF8("/user/hand/right/input/grip/pose"), pPathRightHandPose), "StringToPath");
+            xrCheck(xrStringToPath(xrInstance, stack.UTF8("/user/hand/left/input/select/click"), pPathLeftHandClick), "StringToPath");
+            xrCheck(xrStringToPath(xrInstance, stack.UTF8("/user/hand/right/input/select/click"), pPathRightHandClick), "StringToPath");
             long pathLeftHandPose = pPathLeftHandPose.get(0);
             long pathRightHandPose = pPathRightHandPose.get(0);
+            long pathLeftHandClick = pPathLeftHandClick.get(0);
+            long pathRightHandClick = pPathRightHandClick.get(0);
 
-            XrActionSuggestedBinding.Buffer suggestedBindings = XrActionSuggestedBinding.callocStack(2, stack);
-            suggestedBindings.get(0).action(xrHandAction);
+            XrActionSuggestedBinding.Buffer suggestedBindings = XrActionSuggestedBinding.callocStack(4, stack);
+            suggestedBindings.get(0).action(xrHandPoseAction);
             suggestedBindings.get(0).binding(pathLeftHandPose);
-            suggestedBindings.get(1).action(xrHandAction);
+            suggestedBindings.get(1).action(xrHandPoseAction);
             suggestedBindings.get(1).binding(pathRightHandPose);
+            suggestedBindings.get(2).action(xrHandClickAction);
+            suggestedBindings.get(2).binding(pathLeftHandClick);
+            suggestedBindings.get(3).action(xrHandClickAction);
+            suggestedBindings.get(3).binding(pathRightHandClick);
 
             XrInteractionProfileSuggestedBinding profileSuggestedBinding = XrInteractionProfileSuggestedBinding.callocStack(stack);
             profileSuggestedBinding.type(XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING);
@@ -376,14 +398,14 @@ public class HelloOpenXRVK {
 
             XrActionSpaceCreateInfo ciActionSpaceLeft = XrActionSpaceCreateInfo.callocStack(stack);
             ciActionSpaceLeft.type(XR_TYPE_ACTION_SPACE_CREATE_INFO);
-            ciActionSpaceLeft.action(xrHandAction);
-            ciActionSpaceLeft.subactionPath(leftHandPath);
+            ciActionSpaceLeft.action(xrHandPoseAction);
+            ciActionSpaceLeft.subactionPath(xrPathLeftHand);
             ciActionSpaceLeft.poseInActionSpace(identityPose(stack));
 
             XrActionSpaceCreateInfo ciActionSpaceRight = XrActionSpaceCreateInfo.callocStack(stack);
             ciActionSpaceRight.type(XR_TYPE_ACTION_SPACE_CREATE_INFO);
-            ciActionSpaceRight.action(xrHandAction);
-            ciActionSpaceRight.subactionPath(rightHandPath);
+            ciActionSpaceRight.action(xrHandPoseAction);
+            ciActionSpaceRight.subactionPath(xrPathRightHand);
             ciActionSpaceRight.poseInActionSpace(identityPose(stack));
 
             PointerBuffer pActionSpaceLeft = stack.callocPointer(1);
@@ -1968,7 +1990,8 @@ public class HelloOpenXRVK {
                             ));
                             biRenderPass.pClearValues(clearValues);
 
-                            ByteBuffer pushConstants = stack.calloc(4 * 4 * 4 + 4);
+                            int pushIndexInvertColor = 4 * 4 * 4;
+                            ByteBuffer pushConstants = stack.calloc(pushIndexInvertColor + 4);
                             cameraMatrix.get(pushConstants);
 
                             int stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -1982,14 +2005,37 @@ public class HelloOpenXRVK {
                             vkCmdDrawIndexed(swapchain.commandBuffer, BigModel.NUM_INDICES, 1, 0, 0, 0);
 
                             // Draw (small) hand models if hand locations are known
-                            // TODO Invert the colors if the corresponding hand trigger is pressed
                             if (leftHandMatrix != null) {
+
+                                XrActionStateGetInfo giAction = XrActionStateGetInfo.callocStack(stack);
+                                giAction.type(XR_TYPE_ACTION_STATE_GET_INFO);
+                                giAction.action(xrHandClickAction);
+                                giAction.subactionPath(xrPathLeftHand);
+
+                                XrActionStateBoolean actionState = XrActionStateBoolean.callocStack(stack);
+                                actionState.type(XR_TYPE_ACTION_STATE_BOOLEAN);
+
+                                xrCheck(xrGetActionStateBoolean(xrVkSession, giAction, actionState), "GetActionStateBoolean");
+
+                                pushConstants.putInt(pushIndexInvertColor, actionState.currentState() ? 1 : 0);
                                 cameraMatrix.mul(leftHandMatrix, new Matrix4f()).get(pushConstants);
                                 vkCmdPushConstants(swapchain.commandBuffer, vkPipelineLayout, stageFlags, 0, pushConstants);
                                 vkCmdDrawIndexed(swapchain.commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
                             }
 
                             if (rightHandMatrix != null) {
+
+                                XrActionStateGetInfo giAction = XrActionStateGetInfo.callocStack(stack);
+                                giAction.type(XR_TYPE_ACTION_STATE_GET_INFO);
+                                giAction.action(xrHandClickAction);
+                                giAction.subactionPath(xrPathRightHand);
+
+                                XrActionStateBoolean actionState = XrActionStateBoolean.callocStack(stack);
+                                actionState.type(XR_TYPE_ACTION_STATE_BOOLEAN);
+
+                                xrCheck(xrGetActionStateBoolean(xrVkSession, giAction, actionState), "GetActionStateBoolean");
+
+                                pushConstants.putInt(pushIndexInvertColor, actionState.currentState() ? 1 : 0);
                                 cameraMatrix.mul(rightHandMatrix, new Matrix4f()).get(pushConstants);
                                 vkCmdPushConstants(swapchain.commandBuffer, vkPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, pushConstants);
                                 vkCmdDrawIndexed(swapchain.commandBuffer, 6 * 6, 1, 0, BigModel.NUM_VERTICES, 0);
@@ -2054,8 +2100,11 @@ public class HelloOpenXRVK {
     }
 
     private void destroyXrVkSession() {
-        if (xrHandAction != null) {
-            xrDestroyAction(xrHandAction);
+        if (xrHandPoseAction != null) {
+            xrDestroyAction(xrHandPoseAction);
+        }
+        if (xrHandClickAction != null) {
+            xrDestroyAction(xrHandClickAction);
         }
         if (xrActionSet != null) {
             xrDestroyActionSet(xrActionSet);
