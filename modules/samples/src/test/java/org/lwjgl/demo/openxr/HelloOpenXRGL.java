@@ -365,9 +365,9 @@ public class HelloOpenXRGL {
         }
         glBindTexture(GL_TEXTURE_2D, 0);
 
-        textureShader = Shaders.createShaderProgram(Shaders.texVertShader, Shaders.texFragShader);
-        colorShader = Shaders.createShaderProgram(Shaders.colVertShader, Shaders.colFragShader);
-        screenShader = Shaders.createShaderProgram(Shaders.screenVertShader, Shaders.texFragShader);
+        textureShader = ShadersGL.createShaderProgram(ShadersGL.texVertShader, ShadersGL.texFragShader);
+        colorShader = ShadersGL.createShaderProgram(ShadersGL.colVertShader, ShadersGL.colFragShader);
+        screenShader = ShadersGL.createShaderProgram(ShadersGL.screenVertShader, ShadersGL.texFragShader);
 
         {
             cubeVertexBuffer = glGenBuffers();
