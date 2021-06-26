@@ -27,7 +27,7 @@ import static org.lwjgl.system.MemoryUtil.*;
  * Missing actions (xr input) and can only run on windows
  * Requires a stero headset and an install of the OpenXR runtime to run
  */
-public class HelloOpenXR {
+public class HelloOpenXRGL {
 
     long window;
 
@@ -72,7 +72,7 @@ public class HelloOpenXR {
 //            XR.create("C:\\Program Files (x86)\\Steam\\steamapps\\common\\SteamVR\\bin\\win64\\openxr_loader.dll");
         XR.create();
 
-        HelloOpenXR helloOpenXR = new HelloOpenXR();
+        HelloOpenXRGL helloOpenXR = new HelloOpenXRGL();
         helloOpenXR.createOpenXRInstance();
         helloOpenXR.initializeOpenXRSystem();
         helloOpenXR.initializeAndBindOpenGL();
