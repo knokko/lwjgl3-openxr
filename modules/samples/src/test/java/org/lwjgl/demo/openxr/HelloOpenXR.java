@@ -5,13 +5,10 @@
 package org.lwjgl.demo.openxr;
 
 import org.joml.*;
-import org.joml.Math;
 import org.lwjgl.*;
-import org.lwjgl.glfw.*;
 import org.lwjgl.opengl.*;
 import org.lwjgl.openxr.*;
 import org.lwjgl.system.*;
-import org.lwjgl.system.windows.*;
 
 import java.nio.*;
 import java.util.*;
@@ -38,7 +35,6 @@ public class HelloOpenXR {
     //Init
     XrInstance                     xrInstance;
     long                           systemID;
-    Struct                         graphicsBinding;
     XrSession                      xrSession;
     XrSpace                        xrAppSpace;  //The real world space in which the program runs
     long                           glColorFormat;
@@ -97,7 +93,6 @@ public class HelloOpenXR {
 
         //Destroy OpenXR
         helloOpenXR.eventDataBuffer.free();
-        helloOpenXR.graphicsBinding.free();
         helloOpenXR.views.free();
         helloOpenXR.viewConfigs.free();
         for (Swapchain swapchain : helloOpenXR.swapchains) {
@@ -120,20 +115,6 @@ public class HelloOpenXR {
         glfwTerminate();
     }
 
-    /**
-     * Creates an array of XrStructs with their types pre set to @param type
-     */
-    static ByteBuffer mallocAndFillBufferStack(int capacity, int sizeof, int type) {
-        ByteBuffer b = stackMalloc(capacity * sizeof);
-
-        for (int i = 0; i < capacity; i++) {
-            b.position(i * sizeof);
-            b.putInt(type);
-        }
-        b.rewind();
-        return b;
-    }
-
     private static ByteBuffer mallocAndFillBufferUnsafe(int capacity, int sizeof, int type) {
         ByteBuffer b = memAlloc(capacity * sizeof);
 
@@ -151,9 +132,7 @@ public class HelloOpenXR {
 
             check(XR10.xrEnumerateInstanceExtensionProperties((ByteBuffer)null, numExtensions, null));
 
-            XrExtensionProperties.Buffer properties = new XrExtensionProperties.Buffer(
-                mallocAndFillBufferStack(numExtensions.get(0), XrExtensionProperties.SIZEOF, XR10.XR_TYPE_EXTENSION_PROPERTIES)
-            );
+            XrExtensionProperties.Buffer properties = XRHelper.prepareExtensionProperties(stack, numExtensions.get(0));
 
             check(XR10.xrEnumerateInstanceExtensionProperties((ByteBuffer)null, numExtensions, properties));
 
@@ -239,45 +218,7 @@ public class HelloOpenXR {
             }
 
             //Bind the OpenGL context to the OpenXR instance and create the session
-            switch (Platform.get()) {
-                case LINUX:
-//                    if (xlib) { TODO
-//                        XrGraphicsBindingOpenGLXlibKHR graphicsBinding = XrGraphicsBindingOpenGLXlibKHR.malloc();
-//                        graphicsBinding.set(
-//                            KHROpenglEnable.XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR,
-//                            NULL,
-//                            GLFWNativeX11.glfwGetX11Display(),
-//                            ,
-//                            ,
-//                            GLX.glXGetCurrentDrawable(),
-//                            GLFWNativeGLX.glfwGetGLXContext(window)
-//                        );
-//                        this.graphicsBinding = graphicsBinding;
-//                    } else if (wayland) {
-//                        XrGraphicsBindingOpenGLWaylandKHR graphicsBinding = XrGraphicsBindingOpenGLWaylandKHR.malloc();
-//                        graphicsBinding.set(
-//                            KHROpenglEnable.XR_TYPE_GRAPHICS_BINDING_OPENGL_WAYLAND_KHR,
-//                            NULL,
-//                            GLFWNativeWayland.glfwGetWaylandDisplay()
-//                        );
-//                        this.graphicsBinding = graphicsBinding;
-//                    } else {
-//                        throw new IllegalStateException();
-//                    }
-                    throw new IllegalStateException();
-                case WINDOWS:
-                    XrGraphicsBindingOpenGLWin32KHR winGraphicsBinding = XrGraphicsBindingOpenGLWin32KHR.malloc();
-                    winGraphicsBinding.set(
-                        KHROpenglEnable.XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR,
-                        NULL,
-                        User32.GetDC(GLFWNativeWin32.glfwGetWin32Window(window)),
-                        GLFWNativeWGL.glfwGetWGLContext(window)
-                    );
-                    this.graphicsBinding = winGraphicsBinding;
-                    break;
-                default:
-                    throw new IllegalStateException();
-            }
+            Struct graphicsBinding = XRHelper.createGraphicsBindingOpenGL(stack, window);
 
             XrSessionCreateInfo sessionCreateInfo = XrSessionCreateInfo.mallocStack();
             sessionCreateInfo.set(
@@ -692,7 +633,9 @@ public class HelloOpenXR {
         XrPosef       pose        = layerView.pose();
         XrVector3f    pos         = pose.position$();
         XrQuaternionf orientation = pose.orientation();
-        createProjectionFov(projectionMatrix, layerView.fov(), 0.1f, 100f, false);
+        try (MemoryStack stack = stackPush()) {
+            projectionMatrix.set(XRHelper.createProjectionMatrixBuffer(stack, layerView.fov(), 0.1f, 100f, false));
+        }
         viewMatrix.translationRotateScaleInvert(pos.x(), pos.y(), pos.z(), orientation.x(), orientation.y(), orientation.z(), orientation.w(), 1, 1, 1);
 
         glDisable(GL_CULL_FACE);    // Disable back-face culling so we can see the inside of the world-space cube and backside of the plane
@@ -765,45 +708,6 @@ public class HelloOpenXR {
             super(s);
         }
     }
-
-    static Matrix4f createProjectionFov(Matrix4f dest, XrFovf fov, float nearZ, float farZ, boolean zZeroToOne) {
-        try (MemoryStack stack = stackPush()) {
-            float tanLeft        = Math.tan(fov.angleLeft());
-            float tanRight       = Math.tan(fov.angleRight());
-            float tanDown        = Math.tan(fov.angleDown());
-            float tanUp          = Math.tan(fov.angleUp());
-            float tanAngleWidth  = tanRight - tanLeft;
-            float tanAngleHeight = tanUp - tanDown;
-
-            FloatBuffer m = stack.mallocFloat(16);
-            m.put(0, 2.0f / tanAngleWidth);
-            m.put(4, 0.0f);
-            m.put(8, (tanRight + tanLeft) / tanAngleWidth);
-            m.put(12, 0.0f);
-
-            m.put(1, 0.0f);
-            m.put(5, 2.0f / tanAngleHeight);
-            m.put(9, (tanUp + tanDown) / tanAngleHeight);
-            m.put(13, 0.0f);
-
-            m.put(2, 0.0f);
-            m.put(6, 0.0f);
-            if (zZeroToOne) {
-                m.put(10, -farZ / (farZ - nearZ));
-                m.put(14, -(farZ * nearZ) / (farZ - nearZ));
-            } else {
-                m.put(10, -(farZ + nearZ) / (farZ - nearZ));
-                m.put(14, -(farZ * (nearZ + nearZ)) / (farZ - nearZ));
-            }
-
-            m.put(3, 0.0f);
-            m.put(7, 0.0f);
-            m.put(11, -1.0f);
-            m.put(15, 0.0f);
-            return dest.set(m);
-        }
-    }
-
 
     private static class Geometry {
 
